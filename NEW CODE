@@ -567,15 +567,22 @@ add_action( 'woocommerce_process_shop_order_meta', function( $order_id ) {
 
 /** Bygg portal-URL (ren rute) */
 function lp_mpr_build_portal_url( WC_Order $order, $issue_ver = 0 ) : string {
-	$order_id = $order->get_id();
-	$key      = $order->get_order_key();
-	$base     = user_trailingslashit( trailingslashit( home_url( 'lp-mpr/' . $order_id . '/' . rawurlencode( $key ) ) ) );
-	if ( $issue_ver ) $base = add_query_arg( 'v', (int) $issue_ver, $base );
-	return $base;
+$order_id = $order->get_id();
+$key      = $order->get_order_key();
+
+$args = array(
+'lp_mpr_portal'   => 1,
+'lp_mpr_order_id' => $order_id,
+'lp_mpr_key'      => $key,
+);
+
+if ( $issue_ver ) $args['v'] = (int) $issue_ver;
+
+return add_query_arg( $args, home_url( '/' ) );
 }
 add_filter( 'lp_mpr_portal_url', function( $url, $order_id ){
-	$order = wc_get_order( $order_id );
-	if ( ! $order ) return $url;
+$order = wc_get_order( $order_id );
+if ( ! $order ) return $url;
 	$issue = (array) $order->get_meta( '_lp_mpr_issue', true );
 	$ver = (int) ( $issue['ver'] ?? 0 );
 	return lp_mpr_build_portal_url( $order, $ver );
