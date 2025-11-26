@@ -681,10 +681,23 @@ function lp_mpr_send_suggestion() {
  *           PORTAL – rewrite + query vars + hooks
  * ========================================================== */
 
+/** Gjenbrukbar sjekk: er dette en portal-forespørsel? */
+function lp_mpr_is_portal_request() : bool {
+  return intval( get_query_var( 'lp_mpr_portal' ) ) === 1;
+}
+
 function lp_mpr_register_portal_route() {
-	add_rewrite_rule( '^lp-mpr/([0-9]+)/([^/]+)/?$', 'index.php?lp_mpr_portal=1&lp_mpr_order_id=$matches[1]&lp_mpr_key=$matches[2]', 'top' );
+  add_rewrite_rule( '^lp-mpr/([0-9]+)/([^/]+)/?$', 'index.php?lp_mpr_portal=1&lp_mpr_order_id=$matches[1]&lp_mpr_key=$matches[2]', 'top' );
 }
 add_action( 'init', 'lp_mpr_register_portal_route' );
+
+// Ingen kanonisk omdirigering eller WooCommerce-kontekst for portalen
+add_filter( 'redirect_canonical', function( $redirect ) {
+  return lp_mpr_is_portal_request() ? false : $redirect;
+} );
+add_filter( 'woocommerce_is_account_page', function( $is_account_page ) {
+  return lp_mpr_is_portal_request() ? false : $is_account_page;
+} );
 
 add_filter( 'query_vars', function( $vars ){
 	$vars[] = 'lp_mpr_portal';
@@ -1468,13 +1481,13 @@ add_filter( 'wc_order_statuses', function( $statuses ) {
  * ========================================================== */
 
 add_action( 'template_redirect', function(){
-	if ( intval( get_query_var( 'lp_mpr_portal' ) ) !== 1 ) return;
+  if ( ! lp_mpr_is_portal_request() ) return;
 
-	$order_id  = absint( get_query_var( 'lp_mpr_order_id' ) );
-	$order_key = (string) get_query_var( 'lp_mpr_key' );
-	if ( ! $order_id || ! $order_key ) return;
+  $order_id  = absint( get_query_var( 'lp_mpr_order_id' ) );
+  $order_key = (string) get_query_var( 'lp_mpr_key' );
+  if ( ! $order_id || ! $order_key ) return;
 
-	$order = wc_get_order( $order_id ); if ( ! $order ) return;
+  $order = wc_get_order( $order_id ); if ( ! $order ) return;
 
         // Sikkerhetskontekst (lenke med order-key skal alltid fungere)
         $valid_key = $order_key && hash_equals( (string) $order->get_order_key(), (string) $order_key );
@@ -1484,8 +1497,16 @@ add_action( 'template_redirect', function(){
         }
         if ( ! $ok ) { status_header( 403 ); echo esc_html__( 'Du har ikke tilgang til denne siden.', 'lilleprinsen' ); exit; }
 
-	// Ikke cache
-	nocache_headers();
+  // Ikke cache
+  nocache_headers();
+  status_header( 200 );
+  global $wp_query;
+  if ( $wp_query ) {
+    $wp_query->is_404 = false;
+    $wp_query->is_singular = false;
+    $wp_query->is_page = false;
+    $wp_query->is_home = false;
+  }
 
 	$data  = (array) $order->get_meta( '_lp_missing_replacements', true );
 	$issue = (array) $order->get_meta( '_lp_mpr_issue', true );
