@@ -1,3 +1,4 @@
+<?php
 /**
  * Lilleprinsen — Missing Items Suite (All upgrades)
  * - Multi-suggest, partial shortages, picker dashboard, reminder email, i18n
@@ -111,14 +112,14 @@ if ( ! function_exists( 'lp_missing__log_stock' ) ) {
 		if ( ! $p ) { return; }
 		$title = $p->get_name();
 		$sku   = $p->get_sku();
-		$note  = sprintf(
-			__( 'Inventory %1$s by %2$d for "%3$s"%4$s. Reason: %5$s', 'lilleprinsen' ),
-			( $op === 'increase' ? __( 'increased', 'lilleprinsen' ) : __( 'decreased', 'lilleprinsen' ) ),
-			absint( $qty ),
-			$title,
-			$sku ? ' (SKU ' . $sku . ')' : '',
-			$reason
-		);
+                $note  = sprintf(
+                        __( 'Inventory %1$s by %2$d unit(s) for "%3$s"%4$s. Reason: %5$s', 'lilleprinsen' ),
+                        ( $op === 'increase' ? __( 'increased', 'lilleprinsen' ) : __( 'decreased', 'lilleprinsen' ) ),
+                        absint( $qty ),
+                        $title,
+                        $sku ? ' (SKU ' . $sku . ')' : '',
+                        $reason
+                );
 		$order->add_order_note( $note );
 	}
 }
@@ -182,16 +183,16 @@ if ( ! function_exists( 'lp_missing__create_surcharge_order' ) ) {
 
 		$pay_url = $child->get_checkout_payment_url();
 
-		$parent->add_order_note( sprintf(
-			__( 'Created surcharge order #%1$s for %2$s. Payment link: %3$s', 'lilleprinsen' ),
-			$child->get_order_number(),
-			wc_price( $amount, array( 'currency' => $parent->get_currency() ) ),
-			$pay_url
-		) );
-		$child->add_order_note( sprintf(
-			__( 'Surcharge for alternative chosen on parent order #%1$s.', 'lilleprinsen' ),
-			$parent->get_order_number()
-		) );
+                $parent->add_order_note( sprintf(
+                        __( 'Surcharge order #%1$s created for %2$s to cover the alternative item. Payment link: %3$s', 'lilleprinsen' ),
+                        $child->get_order_number(),
+                        wc_price( $amount, array( 'currency' => $parent->get_currency() ) ),
+                        $pay_url
+                ) );
+                $child->add_order_note( sprintf(
+                        __( 'Awaiting payment: surcharge for an alternative chosen on parent order #%1$s.', 'lilleprinsen' ),
+                        $parent->get_order_number()
+                ) );
 		$parent->save();
 
 		/* Send customer invoice with pay link */
@@ -896,23 +897,38 @@ if ( ! function_exists( 'lp_missing__shortcode_portal' ) ) {
 						$notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'This item is no longer awaiting a decision.', 'lilleprinsen' ) );
 					} else {
 						$ok = false;
-						if ( 'accept_alt' === $action ) {
-							if ( $alt_id > 0 && in_array( $alt_id, $suggs, true ) ) {
-								$qty_alt = min( max( 1, $qty_alt ), max( 1, $qty_mis ) );
-								$choice  = ( $qty_alt < $qty_mis ) ? 'alternative_accepted_split' : 'alternative_accepted';
-								$ok = lp_missing__portal_update_entry( $order, $item_id, array(
-									'status'          => 'resolved',
-									'choice'          => $choice,
-									'selected_alt_id' => $alt_id,
-									'qty_alt'         => $qty_alt,
-								) );
-								$notices[] = $ok
-									? array( 'type' => 'success', 'msg' => esc_html__( 'Thanks! Your choice has been saved.', 'lilleprinsen' ) )
-									: array( 'type' => 'error', 'msg' => esc_html__( 'We could not save your choice. Please try again.', 'lilleprinsen' ) );
-							} else {
-								$notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'The selected alternative is not available.', 'lilleprinsen' ) );
-							}
-						} elseif ( 'decline_alt' === $action ) {
+                                                if ( 'accept_alt' === $action ) {
+                                                        if ( $alt_id > 0 && in_array( $alt_id, $suggs, true ) ) {
+                                                                $alt_product = wc_get_product( $alt_id );
+                                                                if ( ! $alt_product || ! $alt_product->is_purchasable() || ! $alt_product->is_in_stock() ) {
+                                                                        $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'The selected alternative is currently unavailable. Please pick another option.', 'lilleprinsen' ) );
+                                                                } else {
+                                                                        $qty_alt = min( max( 1, $qty_alt ), max( 1, $qty_mis ) );
+                                                                        if ( $alt_product->managing_stock() && ! $alt_product->backorders_allowed() ) {
+                                                                                $available = $alt_product->get_stock_quantity();
+                                                                                if ( null !== $available && $qty_alt > $available ) {
+                                                                                        $notices[] = array( 'type' => 'error', 'msg' => sprintf( esc_html__( 'Only %1$d unit(s) are available for this alternative right now.', 'lilleprinsen' ), max( 0, (int) $available ) ) );
+                                                                                        $qty_alt   = 0;
+                                                                                }
+                                                                        }
+
+                                                                        if ( $qty_alt > 0 ) {
+                                                                                $choice  = ( $qty_alt < $qty_mis ) ? 'alternative_accepted_split' : 'alternative_accepted';
+                                                                                $ok = lp_missing__portal_update_entry( $order, $item_id, array(
+                                                                                        'status'          => 'resolved',
+                                                                                        'choice'          => $choice,
+                                                                                        'selected_alt_id' => $alt_id,
+                                                                                        'qty_alt'         => $qty_alt,
+                                                                                ) );
+                                                                                $notices[] = $ok
+                                                                                        ? array( 'type' => 'success', 'msg' => esc_html__( 'Thanks! Your choice has been saved.', 'lilleprinsen' ) )
+                                                                                        : array( 'type' => 'error', 'msg' => esc_html__( 'We could not save your choice. Please try again.', 'lilleprinsen' ) );
+                                                                        }
+                                                                }
+                                                        } else {
+                                                                $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'The selected alternative is not available.', 'lilleprinsen' ) );
+                                                        }
+                                                } elseif ( 'decline_alt' === $action ) {
 							$ok = lp_missing__portal_update_entry( $order, $item_id, array(
 								'status' => 'missing',
 								'choice' => 'alternative_declined',
@@ -1094,7 +1110,7 @@ if ( ! function_exists( 'lp_missing_register_email_classes' ) ) {
 					$link   = function_exists( 'lp_missing_make_portal_link' ) ? lp_missing_make_portal_link( $this->object ) : '';
 					$intro  = wpautop( wp_kses_post( __( 'We’re contacting you about your order. One or more products are temporarily unavailable. Please review the proposed solutions in your secure portal:', 'lilleprinsen' ) ) );
 					$button = $link ? '<p><a href="' . esc_url( $link ) . '" style="display:inline-block;padding:10px 16px;border-radius:4px;background:#7f54b3;color:#ffffff;text-decoration:none;">' . esc_html__( 'Review solutions', 'lilleprinsen' ) . '</a></p>' : '';
-					return $this->style_inline( wc()->mailer()->wrap_message( esc_html( $this->get_heading() ), $intro . $button ) );
+                                        return $this->style_inline( WC()->mailer()->wrap_message( esc_html( $this->get_heading() ), $intro . $button ) );
 				}
 				public function get_content_plain() {
 					$link = function_exists( 'lp_missing_make_portal_link' ) ? lp_missing_make_portal_link( $this->object ) : '';
@@ -1135,7 +1151,7 @@ if ( ! function_exists( 'lp_missing_register_email_classes' ) ) {
 					$link   = function_exists( 'lp_missing_make_portal_link' ) ? lp_missing_make_portal_link( $this->object ) : '';
 					$intro  = wpautop( wp_kses_post( __( 'This is a friendly reminder to review the proposed solutions for your order.', 'lilleprinsen' ) ) );
 					$button = $link ? '<p><a href="' . esc_url( $link ) . '" style="display:inline-block;padding:10px 16px;border-radius:4px;background:#7f54b3;color:#ffffff;text-decoration:none;">' . esc_html__( 'Review solutions', 'lilleprinsen' ) . '</a></p>' : '';
-					return $this->style_inline( wc()->mailer()->wrap_message( esc_html( $this->get_heading() ), $intro . $button ) );
+                                        return $this->style_inline( WC()->mailer()->wrap_message( esc_html( $this->get_heading() ), $intro . $button ) );
 				}
 				public function get_content_plain() {
 					$link = function_exists( 'lp_missing_make_portal_link' ) ? lp_missing_make_portal_link( $this->object ) : '';
@@ -1205,12 +1221,12 @@ if ( ! function_exists( 'lp_missing_send_reminder_cb' ) ) {
 			$daysHit   = $days_open >= max( 1, absint( $set['escalation_days'] ) );
 
 			if ( $limitHit || $daysHit ) {
-				$order->add_order_note( sprintf(
-					__( 'Missing item escalation: line #%1$d has %2$d reminder(s), open for %3$d day(s).', 'lilleprinsen' ),
-					absint( $item_id ),
-					absint( $entry['reminder_count'] ),
-					max( 0, $days_open )
-				) );
+                                $order->add_order_note( sprintf(
+                                        __( 'Escalation triggered: line #%1$d has waited %3$d day(s) after %2$d reminder(s).', 'lilleprinsen' ),
+                                        absint( $item_id ),
+                                        absint( $entry['reminder_count'] ),
+                                        max( 0, $days_open )
+                                ) );
 				update_post_meta( $order_id, '_lp_missing_needs_manual_followup', 1 );
 			}
 		}
@@ -1353,9 +1369,9 @@ add_action( 'lp_missing_daily_cleanup', function(){
 		if ( $ageDays >= $keepDays ) {
 			delete_post_meta( $oid, '_lp_missing_items' );
 			delete_post_meta( $oid, '_lp_missing_needs_manual_followup' );
-			$order->add_order_note( __( 'Cleaned up Missing Items metadata (auto).', 'lilleprinsen' ) );
-		}
-	}
+                        $order->add_order_note( __( 'Removed resolved Missing Items details automatically after the retention period.', 'lilleprinsen' ) );
+                }
+        }
 } );
 /* ------------------------------------------------
  * Settings page (WooCommerce submenu)
