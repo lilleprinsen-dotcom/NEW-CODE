@@ -237,12 +237,13 @@ if ( ! function_exists( 'lp_missing__validate_payload' ) ) {
 	function lp_missing__validate_payload( $data ) {
 		$clean = array(
 			'status'             => 'missing',
-			'notes'              => '',
-			'staff_notes'        => '',
-			'qty_missing'        => 0,
-			'suggested_products' => array(),
-			'selected_alt_id'    => 0,
-			'qty_alt'            => 0,
+                        'notes'              => '',
+                        'staff_notes'        => '',
+                        'manual_alternative' => '',
+                        'qty_missing'        => 0,
+                        'suggested_products' => array(),
+                        'selected_alt_id'    => 0,
+                        'qty_alt'            => 0,
 		);
 		$data = is_array( $data ) ? $data : array();
 
@@ -251,17 +252,20 @@ if ( ! function_exists( 'lp_missing__validate_payload' ) ) {
 			$st = strtolower( trim( $data['status'] ) );
 			if ( in_array( $st, $allowed_status, true ) ) { $clean['status'] = $st; }
 		}
-		if ( isset( $data['notes'] ) ) {
-			$clean['notes'] = sanitize_textarea_field( (string) $data['notes'] );
-		}
-		if ( isset( $data['staff_notes'] ) ) {
-			$clean['staff_notes'] = sanitize_textarea_field( (string) $data['staff_notes'] );
-		}
-		if ( isset( $data['qty_missing'] ) ) {
-			$clean['qty_missing'] = max( 0, absint( $data['qty_missing'] ) );
-		}
-		if ( isset( $data['suggested_products'] ) && is_array( $data['suggested_products'] ) ) {
-			$ids = array();
+                if ( isset( $data['notes'] ) ) {
+                        $clean['notes'] = sanitize_textarea_field( (string) $data['notes'] );
+                }
+                if ( isset( $data['staff_notes'] ) ) {
+                        $clean['staff_notes'] = sanitize_textarea_field( (string) $data['staff_notes'] );
+                }
+                if ( isset( $data['manual_alternative'] ) ) {
+                        $clean['manual_alternative'] = sanitize_textarea_field( (string) $data['manual_alternative'] );
+                }
+                if ( isset( $data['qty_missing'] ) ) {
+                        $clean['qty_missing'] = max( 0, absint( $data['qty_missing'] ) );
+                }
+                if ( isset( $data['suggested_products'] ) && is_array( $data['suggested_products'] ) ) {
+                        $ids = array();
 			foreach ( $data['suggested_products'] as $id ) {
 				$id = absint( $id );
 				if ( $id > 0 ) { $ids[] = $id; }
@@ -306,20 +310,21 @@ if ( ! function_exists( 'lp_missing_set_item' ) ) {
 		$order = wc_get_order( $order_id );
 		if ( ! $order || $item_id <= 0 ) { return false; }
 
-		$clean = lp_missing__validate_payload( $data );
-		$map   = lp_missing__get_items_map( $order_id );
-		$prev  = isset( $map[ $item_id ] ) ? $map[ $item_id ] : array();
+                        $clean = lp_missing__validate_payload( $data );
+                $map   = lp_missing__get_items_map( $order_id );
+                $prev  = isset( $map[ $item_id ] ) ? $map[ $item_id ] : array();
 
-		$map[ $item_id ] = array_merge(
-			array(
-				'status'             => 'missing',
-				'notes'              => '',
-				'staff_notes'        => '',
-				'qty_missing'        => 0,
-				'suggested_products' => array(),
-				'selected_alt_id'    => 0,
-				'qty_alt'            => 0,
-				'stock_locked_qty'   => isset( $prev['stock_locked_qty'] ) ? absint( $prev['stock_locked_qty'] ) : 0,
+                $map[ $item_id ] = array_merge(
+                        array(
+                                'status'             => 'missing',
+                                'notes'              => '',
+                                'staff_notes'        => '',
+                                'manual_alternative' => '',
+                                'qty_missing'        => 0,
+                                'suggested_products' => array(),
+                                'selected_alt_id'    => 0,
+                                'qty_alt'            => 0,
+                                'stock_locked_qty'   => isset( $prev['stock_locked_qty'] ) ? absint( $prev['stock_locked_qty'] ) : 0,
 			),
 			$prev,
 			$clean
@@ -421,24 +426,26 @@ if ( ! function_exists( 'lp_missing_render_metabox' ) ) {
 			if ( ! ( $item instanceof WC_Order_Item_Product ) ) { continue; }
 			$prefill = isset( $stored_map[ $item_id ] ) ? $stored_map[ $item_id ] : array();
 
-			$status          = isset( $prefill['status'] ) ? (string) $prefill['status'] : '';
-			$is_missing      = ( $status === 'missing' || $status === 'removed' );
-			$qty_missing     = isset( $prefill['qty_missing'] ) ? max( 0, absint( $prefill['qty_missing'] ) ) : 0;
-			$notes           = isset( $prefill['notes'] ) ? (string) $prefill['notes'] : '';
-			$staff_notes     = isset( $prefill['staff_notes'] ) ? (string) $prefill['staff_notes'] : '';
-			$suggested_array = isset( $prefill['suggested_products'] ) && is_array( $prefill['suggested_products'] ) ? array_map( 'absint', $prefill['suggested_products'] ) : array();
-			$propose_delete  = isset( $prefill['propose_delete'] ) ? absint( $prefill['propose_delete'] ) : 0;
+                        $status          = isset( $prefill['status'] ) ? (string) $prefill['status'] : '';
+                        $is_missing      = ( $status === 'missing' || $status === 'removed' );
+                        $qty_missing     = isset( $prefill['qty_missing'] ) ? max( 0, absint( $prefill['qty_missing'] ) ) : 0;
+                        $notes           = isset( $prefill['notes'] ) ? (string) $prefill['notes'] : '';
+                        $staff_notes     = isset( $prefill['staff_notes'] ) ? (string) $prefill['staff_notes'] : '';
+                        $manual_alt      = isset( $prefill['manual_alternative'] ) ? (string) $prefill['manual_alternative'] : '';
+                        $suggested_array = isset( $prefill['suggested_products'] ) && is_array( $prefill['suggested_products'] ) ? array_map( 'absint', $prefill['suggested_products'] ) : array();
+                        $propose_delete  = isset( $prefill['propose_delete'] ) ? absint( $prefill['propose_delete'] ) : 0;
 
-			$product_name = $item->get_name();
+                        $product_name = $item->get_name();
 
-			$cb_id      = 'lp_missing_' . $item_id . '_mark_missing';
-			$qty_id     = 'lp_missing_' . $item_id . '_qty_missing';
-			$notes_id   = 'lp_missing_' . $item_id . '_notes';
-			$staff_id   = 'lp_missing_' . $item_id . '_staff_notes';
-			$search_id  = 'lp_missing_' . $item_id . '_suggest_search';
-			$list_id    = 'lp_missing_' . $item_id . '_suggest_list';
-			$hidden_id  = 'lp_missing_' . $item_id . '_suggested_products_csv';
-			$delete_id  = 'lp_missing_' . $item_id . '_propose_delete';
+                        $cb_id      = 'lp_missing_' . $item_id . '_mark_missing';
+                        $qty_id     = 'lp_missing_' . $item_id . '_qty_missing';
+                        $notes_id   = 'lp_missing_' . $item_id . '_notes';
+                        $staff_id   = 'lp_missing_' . $item_id . '_staff_notes';
+                        $manual_id  = 'lp_missing_' . $item_id . '_manual_alt';
+                        $search_id  = 'lp_missing_' . $item_id . '_suggest_search';
+                        $list_id    = 'lp_missing_' . $item_id . '_suggest_list';
+                        $hidden_id  = 'lp_missing_' . $item_id . '_suggested_products_csv';
+                        $delete_id  = 'lp_missing_' . $item_id . '_propose_delete';
 
 			echo '<fieldset class="lp-missing-item" style="margin:1em 0;padding:1em;border:1px solid #ccd0d4;border-radius:6px;">';
 			echo '<legend style="font-weight:600;">' . esc_html( $product_name ) . ' ' . sprintf( esc_html__( '(Line item ID: %d)', 'lilleprinsen' ), (int) $item_id ) . '</legend>';
@@ -455,13 +462,17 @@ if ( ! function_exists( 'lp_missing_render_metabox' ) ) {
 			echo ' <span class="woocommerce-help-tip" data-tip="' . esc_attr__( 'How many units you cannot ship. Adjusts inventory lock and customer options.', 'lilleprinsen' ) . '"></span><br />';
 			echo '<input type="number" min="0" step="1" id="' . esc_attr( $qty_id ) . '" name="' . esc_attr( $qty_id ) . '" value="' . esc_attr( $qty_missing ) . '" style="max-width:120px;width:100%;" /></p>';
 
-			echo '<p><label for="' . esc_attr( $notes_id ) . '">' . esc_html__( 'Notes', 'lilleprinsen' ) . '</label>';
-			echo ' <span class="woocommerce-help-tip" data-tip="' . esc_attr__( 'Short message shown to the customer explaining the situation.', 'lilleprinsen' ) . '"></span><br />';
-			echo '<textarea id="' . esc_attr( $notes_id ) . '" name="' . esc_attr( $notes_id ) . '" rows="3" style="width:100%;">' . esc_textarea( $notes ) . '</textarea></p>';
+                        echo '<p><label for="' . esc_attr( $notes_id ) . '">' . esc_html__( 'Notes', 'lilleprinsen' ) . '</label>';
+                        echo ' <span class="woocommerce-help-tip" data-tip="' . esc_attr__( 'Short message shown to the customer explaining the situation.', 'lilleprinsen' ) . '"></span><br />';
+                        echo '<textarea id="' . esc_attr( $notes_id ) . '" name="' . esc_attr( $notes_id ) . '" rows="3" style="width:100%;">' . esc_textarea( $notes ) . '</textarea></p>';
 
-			echo '<p><label for="' . esc_attr( $staff_id ) . '">' . esc_html__( 'Internal notes (staff only)', 'lilleprinsen' ) . '</label>';
-			echo ' <span class="woocommerce-help-tip" data-tip="' . esc_attr__( 'Visible only to store staff. Not emailed or shown in the portal.', 'lilleprinsen' ) . '"></span><br />';
-			echo '<textarea id="' . esc_attr( $staff_id ) . '" name="' . esc_attr( $staff_id ) . '" rows="2" style="width:100%;" placeholder="' . esc_attr__( 'Not visible to customers', 'lilleprinsen' ) . '">' . esc_textarea( $staff_notes ) . '</textarea></p>';
+                        echo '<p><label for="' . esc_attr( $manual_id ) . '">' . esc_html__( 'Manual alternative proposal', 'lilleprinsen' ) . '</label>';
+                        echo ' <span class="woocommerce-help-tip" data-tip="' . esc_attr__( 'Optional customer-facing suggestion when you want to propose a specific alternative in plain text.', 'lilleprinsen' ) . '"></span><br />';
+                        echo '<textarea id="' . esc_attr( $manual_id ) . '" name="' . esc_attr( $manual_id ) . '" rows="2" style="width:100%;" placeholder="' . esc_attr__( 'Example: We can swap to the 500g size in blue packaging.', 'lilleprinsen' ) . '">' . esc_textarea( $manual_alt ) . '</textarea></p>';
+
+                        echo '<p><label for="' . esc_attr( $staff_id ) . '">' . esc_html__( 'Internal notes (staff only)', 'lilleprinsen' ) . '</label>';
+                        echo ' <span class="woocommerce-help-tip" data-tip="' . esc_attr__( 'Visible only to store staff. Not emailed or shown in the portal.', 'lilleprinsen' ) . '"></span><br />';
+                        echo '<textarea id="' . esc_attr( $staff_id ) . '" name="' . esc_attr( $staff_id ) . '" rows="2" style="width:100%;" placeholder="' . esc_attr__( 'Not visible to customers', 'lilleprinsen' ) . '">' . esc_textarea( $staff_notes ) . '</textarea></p>';
 
 			/* Multi-suggest picker */
 			echo '<div class="lp-missing-suggest">';
@@ -682,10 +693,11 @@ if ( ! function_exists( 'lp_missing_save_metabox' ) ) {
 
                         $has_missing = true;
 
-			$qty_missing  = isset( $_POST[ 'lp_missing_' . $iid . '_qty_missing' ] ) ? max( 0, absint( $_POST[ 'lp_missing_' . $iid . '_qty_missing' ] ) ) : 0;
-			$notes        = isset( $_POST[ 'lp_missing_' . $iid . '_notes' ] ) ? sanitize_textarea_field( wp_unslash( $_POST[ 'lp_missing_' . $iid . '_notes' ] ) ) : '';
-			$staff_notes  = isset( $_POST[ 'lp_missing_' . $iid . '_staff_notes' ] ) ? sanitize_textarea_field( wp_unslash( $_POST[ 'lp_missing_' . $iid . '_staff_notes' ] ) ) : '';
-			$propose_del  = isset( $_POST[ 'lp_missing_' . $iid . '_propose_delete' ] ) ? 1 : 0;
+                        $qty_missing  = isset( $_POST[ 'lp_missing_' . $iid . '_qty_missing' ] ) ? max( 0, absint( $_POST[ 'lp_missing_' . $iid . '_qty_missing' ] ) ) : 0;
+                        $notes        = isset( $_POST[ 'lp_missing_' . $iid . '_notes' ] ) ? sanitize_textarea_field( wp_unslash( $_POST[ 'lp_missing_' . $iid . '_notes' ] ) ) : '';
+                        $manual_alt   = isset( $_POST[ 'lp_missing_' . $iid . '_manual_alt' ] ) ? sanitize_textarea_field( wp_unslash( $_POST[ 'lp_missing_' . $iid . '_manual_alt' ] ) ) : '';
+                        $staff_notes  = isset( $_POST[ 'lp_missing_' . $iid . '_staff_notes' ] ) ? sanitize_textarea_field( wp_unslash( $_POST[ 'lp_missing_' . $iid . '_staff_notes' ] ) ) : '';
+                        $propose_del  = isset( $_POST[ 'lp_missing_' . $iid . '_propose_delete' ] ) ? 1 : 0;
 
 			/* Multi-suggest CSV -> array (keep exact IDs, incl variations) */
 			$csv = isset( $_POST[ 'lp_missing_' . $iid . '_suggested_products_csv' ] ) ? (string) $_POST[ 'lp_missing_' . $iid . '_suggested_products_csv' ] : '';
@@ -698,14 +710,15 @@ if ( ! function_exists( 'lp_missing_save_metabox' ) ) {
 				$suggested_products = array_values( array_unique( $suggested_products ) );
 			}
 
-			/* Save core fields (includes staff_notes) */
-			lp_missing_set_item( $order_id, $iid, array(
-				'status'             => 'missing',
-				'notes'              => $notes,
-				'staff_notes'        => $staff_notes,
-				'qty_missing'        => $qty_missing,
-				'suggested_products' => $suggested_products,
-			) );
+                        /* Save core fields (includes staff_notes) */
+                        lp_missing_set_item( $order_id, $iid, array(
+                                'status'             => 'missing',
+                                'notes'              => $notes,
+                                'manual_alternative' => $manual_alt,
+                                'staff_notes'        => $staff_notes,
+                                'qty_missing'        => $qty_missing,
+                                'suggested_products' => $suggested_products,
+                        ) );
 
 			/* Merge propose_delete + keep any existing choice/selected_alt_id */
 			$map  = lp_missing_get_all( $order_id );
@@ -1144,10 +1157,11 @@ if ( ! function_exists( 'lp_missing__shortcode_portal' ) ) {
 				$status = isset( $entry['status'] ) ? (string) $entry['status'] : '';
 				if ( ! in_array( $status, array( 'missing', 'removed' ), true ) ) { continue; }
 
-				$qty_missing = isset( $entry['qty_missing'] ) ? max( 0, absint( $entry['qty_missing'] ) ) : 0;
-				$notes       = isset( $entry['notes'] ) ? (string) $entry['notes'] : '';
-				$suggs       = isset( $entry['suggested_products'] ) && is_array( $entry['suggested_products'] ) ? array_map( 'absint', $entry['suggested_products'] ) : array();
-				$propdel     = ! empty( $entry['propose_delete'] ) ? 1 : 0;
+                                $qty_missing = isset( $entry['qty_missing'] ) ? max( 0, absint( $entry['qty_missing'] ) ) : 0;
+                                $notes       = isset( $entry['notes'] ) ? (string) $entry['notes'] : '';
+                                $manual_alt  = isset( $entry['manual_alternative'] ) ? (string) $entry['manual_alternative'] : '';
+                                $suggs       = isset( $entry['suggested_products'] ) && is_array( $entry['suggested_products'] ) ? array_map( 'absint', $entry['suggested_products'] ) : array();
+                                $propdel     = ! empty( $entry['propose_delete'] ) ? 1 : 0;
 
 				if ( ! ( $item instanceof WC_Order_Item_Product ) ) { continue; }
 				$product   = $item->get_product();
@@ -1171,12 +1185,15 @@ if ( ! function_exists( 'lp_missing__shortcode_portal' ) ) {
 				}
 				echo '<p style="margin:4px 0;"><strong>' . esc_html__( 'Quantity ordered:', 'lilleprinsen' ) . '</strong> ' . esc_html( (string) $qty ) . '</p>';
 				echo '<p style="margin:4px 0;"><strong>' . esc_html__( 'Quantity missing:', 'lilleprinsen' ) . '</strong> ' . esc_html( (string) $qty_missing ) . '</p>';
-				if ( $notes !== '' ) {
-					echo '<p style="margin:6px 0;"><strong>' . esc_html__( 'Notes:', 'lilleprinsen' ) . '</strong> ' . esc_html( $notes ) . '</p>';
-				}
+                                if ( $notes !== '' ) {
+                                        echo '<p style="margin:6px 0;"><strong>' . esc_html__( 'Notes:', 'lilleprinsen' ) . '</strong> ' . esc_html( $notes ) . '</p>';
+                                }
+                                if ( $manual_alt !== '' ) {
+                                        echo '<p style="margin:6px 0;"><strong>' . esc_html__( 'Proposed alternative:', 'lilleprinsen' ) . '</strong> ' . esc_html( $manual_alt ) . '</p>';
+                                }
 
-				/* Multi-suggest buttons (only purchasable + in-stock) */
-				if ( 'missing' === $status && ! empty( $suggs ) ) {
+                                /* Multi-suggest buttons (only purchasable + in-stock) */
+                                if ( 'missing' === $status && ! empty( $suggs ) ) {
 					echo '<div class="lp-missing-alt-group" style="margin:8px 0;">';
 					echo '<p><strong>' . esc_html__( 'Suggested alternatives:', 'lilleprinsen' ) . '</strong></p>';
 					foreach ( $suggs as $sid ) {
