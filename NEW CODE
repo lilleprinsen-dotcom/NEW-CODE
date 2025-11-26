@@ -1,3 +1,4 @@
+<?php
 /**
  * Plugin Name: Lilleprinsen – Erstatning for manglende varer (Admin + Egen mobilportal + Async + Tillegg)
  * Description: Admin-velger for erstatning + egen mobiltilpasset portal. Asynkron ordreendring via Action Scheduler (med debounce). Lagersmart søk. Bevarer brutto per enhet & opprinnelig mva-klasse, fryser rabatter og rater ikke frakt på nytt. Logger lager før/etter. Tilleggsordre kun for forslag merket “kunde betaler”. Reservasjon av lager ved top-up. Minimal lasting.
@@ -159,12 +160,12 @@ add_action( 'add_meta_boxes', function () {
 			: 'shop_order';
 
 	add_meta_box(
-		'lp_missing_product_replacement',
-		__( 'Erstatning for manglende vare', 'lilleprinsen' ),
-		'lp_render_missing_product_replacement_box',
-		$screen,
-		'normal',
-		'high'
+	'lp_missing_product_replacement',
+	__( 'Erstatning for manglende vare', 'lilleprinsen' ),
+	'lp_render_missing_product_replacement_box',
+	$screen,
+	'advanced',
+	'low'
 	);
 } );
 
@@ -204,30 +205,53 @@ function lp_render_missing_product_replacement_box( $object ) {
 	wp_nonce_field( 'lp_missing_replacements_save', 'lp_missing_replacements_nonce' );
 	wp_nonce_field( 'lp_mpr_send_suggestion', 'lp_mpr_send_suggestion_nonce' );
 
-	echo '<style>
-	#lp-mpr{padding:8px}
-	#lp-mpr .lp-row{margin:10px 0;padding:12px;border:1px solid #e5e7eb;border-radius:8px;background:#fafafa}
-	#lp-mpr .lp-top{display:flex;align-items:center;gap:12px}
-	#lp-mpr .lp-name{flex:1;font-size:13px;line-height:1.45}
-	#lp-mpr .lp-qty{width:96px}
-	#lp-mpr .lp-preview{font-size:12px;color:#667085;min-width:60px;text-align:right}
-	#lp-mpr small.muted{color:#667085}
-	#lp-mpr .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-	#lp-mpr .lp-actions{margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb}
-	#lp-mpr .is-disabled{opacity:.6}
-	#lp-mpr .lp-suggestions{margin-top:10px;padding-top:10px;border-top:1px dashed #e5e7eb}
-	#lp-mpr .lp-suggestion{display:flex;gap:8px;align-items:flex-start;margin:6px 0}
-	#lp-mpr .lp-suggestion .lp-sq{width:80px}
-	#lp-mpr .lp-suggestion .lp-remove{margin-left:auto}
-	#lp-mpr .lp-add{margin-top:6px}
-	#lp-mpr .select2-container{min-width:320px}
-	#lp-mpr .delta-badge{font-size:11px;padding:2px 6px;border-radius:999px;background:#eef2ff;color:#3730a3;margin-left:6px;white-space:nowrap}
-	#lp-mpr .mode{font-size:12px;color:#334155}
-	</style>';
+echo '<style>
+#lp-mpr{padding:10px;background:#f8fafc;border-radius:8px}
+#lp-mpr .lp-header{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+#lp-mpr .lp-eyebrow{margin:0;color:#475569;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+#lp-mpr .lp-title{margin:2px 0 0;font-size:14px;font-weight:700;color:#0f172a}
+#lp-mpr .lp-chips{display:flex;gap:6px;flex-wrap:wrap}
+#lp-mpr .lp-chip{background:#fff;border:1px solid #e2e8f0;border-radius:999px;padding:4px 10px;font-size:12px;color:#0f172a;box-shadow:0 1px 2px rgba(15,23,42,.06);display:inline-flex;align-items:center;gap:6px}
+#lp-mpr .lp-note{margin:4px 0 10px;color:#475569;font-size:12px}
+#lp-mpr .lp-row{margin:10px 0;padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+#lp-mpr .lp-top{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+#lp-mpr .lp-name{flex:1;font-size:13px;line-height:1.45;color:#0f172a}
+#lp-mpr .lp-qty{width:96px}
+#lp-mpr .lp-preview{font-size:12px;color:#475569;min-width:60px;text-align:right}
+#lp-mpr small.muted{color:#667085}
+#lp-mpr .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+#lp-mpr .lp-actions{margin-top:14px;padding:12px;border-top:1px solid #e5e7eb;background:#fff;border-radius:10px}
+#lp-mpr .is-disabled{opacity:.6}
+#lp-mpr .lp-suggestions{margin-top:10px;padding-top:10px;border-top:1px dashed #e5e7eb}
+#lp-mpr .lp-suggestion{display:flex;gap:8px;align-items:flex-start;margin:6px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px}
+#lp-mpr .lp-suggestion .lp-sq{width:80px}
+#lp-mpr .lp-suggestion .lp-remove{margin-left:auto}
+#lp-mpr .lp-add{margin-top:6px}
+#lp-mpr .select2-container{min-width:320px}
+#lp-mpr .delta-badge{font-size:11px;padding:2px 6px;border-radius:999px;background:#eef2ff;color:#1d4ed8;margin-left:6px;white-space:nowrap}
+#lp-mpr .mode{font-size:12px;color:#334155}
+</style>';
 
 	echo '<div id="lp-mpr" role="group" aria-label="' . esc_attr__( 'Erstatninger for manglende varer', 'lilleprinsen' ) . '">';
 
-	foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
+	$stats = array( 'active' => 0, 'suggestions' => 0 );
+	foreach ( $saved as $row ) {
+	if ( ! empty( $row['enabled'] ) ) $stats['active']++;
+	if ( ! empty( $row['suggestions'] ) && is_array( $row['suggestions'] ) ) $stats['suggestions'] += count( $row['suggestions'] );
+	}
+	$line_items_count = count( $order->get_items( 'line_item' ) );
+
+	echo '<div class="lp-header">';
+	echo '<div><p class="lp-eyebrow">' . esc_html__( 'Oversikt', 'lilleprinsen' ) . '</p><p class="lp-title">' . esc_html__( 'Manglende varer & forslag', 'lilleprinsen' ) . '</p></div>';
+	echo '<div class="lp-chips">';
+	echo '<span class="lp-chip">📦 ' . esc_html( sprintf( _n( '%d varelinje', '%d varelinjer', $line_items_count, 'lilleprinsen' ), $line_items_count ) ) . '</span>';
+	echo '<span class="lp-chip">✅ ' . esc_html( sprintf( _n( '%d aktiv', '%d aktive', $stats['active'], 'lilleprinsen' ), $stats['active'] ) ) . '</span>';
+	echo '<span class="lp-chip">💡 ' . esc_html( sprintf( _n( '%d forslag', '%d forslag', $stats['suggestions'], 'lilleprinsen' ), $stats['suggestions'] ) ) . '</span>';
+echo '</div>';
+echo '</div>';
+echo '<p class="lp-note">' . esc_html__( 'Stegene ligger nederst for å gi deg full oversikt – merk linjene som mangler, legg til forslag og send lenke til kunden.', 'lilleprinsen' ) . '</p>';
+
+foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
 		$name         = $item->get_name();
 		$variation_id = $item->get_variation_id();
 		$ordered_qty  = (int) $item->get_quantity();
@@ -1157,7 +1181,7 @@ function lp_mpr_apply_delete_only( WC_Order $order, array $payload ) : array {
 		$changes[] = array( 'order_item_id'=>$order_item_id, 'old'=>array('name'=>$old_item->get_name(),'qty_before'=>$old_qty,'qty_after'=>$new_qty), 'new_added'=>array() );
 	}
 	$order->calculate_totals(false); $order->save();
-	if ( ! empty( $changes ) ) $order->add_order_note( __( 'MPR: Manglende vare(r) slettet uten alternativ.', 'lilleprinsen' ), false );
+if ( ! empty( $changes ) ) $order->add_order_note( __( '🗑️ MPR: Manglende vare(r) slettet uten alternativ.', 'lilleprinsen' ), false );
 	return array( 'changes'=>$changes );
 }
 
@@ -1271,16 +1295,26 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 	$order->calculate_totals(false); $order->save();
 	if ( function_exists( 'wc_delete_shop_order_transients' ) ) wc_delete_shop_order_transients( $order->get_id() );
 
+	$currency = $order->get_currency();
 	if ( ! empty( $changes ) ) {
 		$lines = array();
 		foreach ( $changes as $c ) {
 			$old = $c['old'];
-			$lines[] = sprintf( 'Gammel: %s (ID %d%s) antall %d → %d; lager-modus=%s', $old['name'], $old['product_id'], $old['variation_id']?'/'.$old['variation_id']:'', $old['qty_before'], $old['qty_after'], $old['stock_mode'] );
-			foreach ( $c['new_added'] as $n ) $lines[] = sprintf( 'Ny: %s (ID %d) × %d — brutto delsum %.2f, brutto totalt %.2f', $n['name'], $n['product_id'], $n['qty'], $n['subtotal_gross'], $n['total_gross'] );
+			$id_label = '#' . $old['product_id'] . ( $old['variation_id'] ? '/' . $old['variation_id'] : '' );
+			$lines[] = sprintf( '• %s (%s): %d → %d — %s', $old['name'], $id_label, $old['qty_before'], $old['qty_after'], $old['stock_mode'] );
+			foreach ( $c['new_added'] as $n ) {
+				$price_str = wp_strip_all_tags( wc_price( $n['total_gross'], array( 'currency' => $currency ) ) );
+				$stock_note = '';
+				if ( $n['stock_before'] !== null && $n['stock_after'] !== null ) {
+					$stock_note = ' (' . sprintf( __( 'lager %d → %d', 'lilleprinsen' ), $n['stock_before'], $n['stock_after'] ) . ')';
+				}
+				$lines[] = sprintf( '   ↳ + %s (#%d) × %d — %s%s', $n['name'], $n['product_id'], $n['qty'], $price_str, $stock_note );
+			}
 		}
-		$order->add_order_note( "MPR: Erstatning brukt.\n" . implode("\n",$lines) . "\nPolitikk: cap per linje; behold brutto per enhet; opprinnelig mva-klasse; rabatter frosset; frakt uendret.", false );
+		$policy = __( 'Politikk: cap per linje; behold brutto per enhet; opprinnelig mva-klasse; rabatter frosset; frakt uendret.', 'lilleprinsen' );
+		$order->add_order_note( "🧾 MPR: Erstatning brukt\n" . implode( "\n", $lines ) . "\n" . $policy, false );
 	} else {
-		$order->add_order_note( __( 'MPR: Ingen endringer ble gjort.', 'lilleprinsen' ), false );
+		$order->add_order_note( __( 'ℹ️ MPR: Ingen endringer ble gjort.', 'lilleprinsen' ), false );
 	}
 	return array( 'changes' => $changes );
 }
@@ -1468,80 +1502,83 @@ add_action( 'template_redirect', function(){
 			if ( $m === 'store_covers' ) $cnt_store_covers++; else $cnt_customer_pays++;
 		}
 	}
-	$ttl_minutes = max( 1, floor( lp_mpr_reservation_ttl_seconds() / 60 ) );
+$ttl_minutes = max( 1, floor( lp_mpr_reservation_ttl_seconds() / 60 ) );
+$customer_name = trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() );
+if ( ! $customer_name ) $customer_name = (string) $order->get_billing_company();
+if ( ! $customer_name ) $customer_name = (string) $order->get_formatted_billing_full_name();
+if ( ! $customer_name ) $customer_name = __( 'venn', 'lilleprinsen' );
 
-	?><!doctype html>
-	<html <?php language_attributes(); ?>>
+?><!doctype html>
+<html <?php language_attributes(); ?>>
 	<head>
 	<meta charset="<?php bloginfo( 'charset' ); ?>">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title><?php echo esc_html__( 'Erstatninger for manglende varer', 'lilleprinsen' ); ?></title>
-	<style>
-		:root{--b:#0f172a;--m:#475569;--bg:#f8fafc;--br:#e5e7eb;--p:#1d4ed8;--chip:#0f766e;}
-		body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--b);}
-		.container{max-width:720px;margin:0 auto;padding:16px;}
-		h1{font-size:20px;margin:0 0 12px 0}
-		.card{background:#fff;border:1px solid var(--br);border-radius:10px;padding:12px;margin:12px 0}
-		.row{display:flex;gap:10px;align-items:center}
-		.split{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-top:8px}
-		.tag{font-size:12px;color:var(--m)}
-		.badge{font-size:11px;background:#eef2ff;color:#3730a3;padding:2px 8px;border-radius:999px;white-space:nowrap}
-		.chip{font-size:10px;background:#ecfeff;color:#0e7490;border:1px solid #a5f3fc;padding:1px 6px;border-radius:999px;margin-left:6px;white-space:nowrap}
-		.choice{display:flex;gap:8px;align-items:center;padding:8px;border:1px solid var(--br);border-radius:8px;margin:6px 0}
-		.choice img{flex:0 0 auto}
-		.choice a{color:var(--b);text-decoration:none}
-		.choice a:focus,.choice a:hover{color:var(--p);text-decoration:underline}
-		.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-		button{appearance:none;background:var(--p);border:0;color:#fff;border-radius:8px;padding:10px 14px;font-weight:600}
-		button.secondary{background:#fff;color:var(--b);border:1px solid var(--br)}
-		.footer-note{color:var(--m);font-size:13px;margin-top:8px}
-		hr{border:0;border-top:1px solid var(--br);margin:8px 0}
-		.small{font-size:12px;color:var(--m)}
-		.li{list-style:none;padding:0;margin:0}
-		.qty{font-variant-numeric:tabular-nums}
-		.old{display:flex;gap:8px;align-items:center}
-		.infobox{background:#ecfeff;border:1px solid #a5f3fc;color:#0c4a6e;border-radius:10px;padding:10px;margin:10px 0}
-		.infobox strong{white-space:nowrap}
-		@media (max-width:480px){ .badge{margin-top:4px} }
-	</style>
+<title><?php echo esc_html__( 'Erstatninger for manglende varer', 'lilleprinsen' ); ?></title>
+<style>
+:root{--ink:#0f172a;--muted:#475569;--bg:#f8fafc;--card:#ffffff;--br:#e2e8f0;--accent:#2563eb;--pill:#e0f2fe;}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);}
+.container{max-width:720px;margin:0 auto;padding:18px;}
+.hero{display:flex;gap:12px;align-items:center;background:linear-gradient(135deg,#0f172a,#1e293b);color:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 10px 30px rgba(15,23,42,.16);margin-bottom:12px}
+.hero .emoji{font-size:26px}
+.hero .title{margin:0;font-size:18px;font-weight:700}
+.hero .subtitle{margin:4px 0 0;font-size:13px;color:rgba(255,255,255,.9)}
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px 0}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:8px 10px;background:var(--pill);border:1px solid #bae6fd;color:#0f172a;border-radius:12px;font-size:12px;box-shadow:0 1px 3px rgba(15,23,42,.08)}
+.pill .emoji{font-size:14px}
+.card{background:var(--card);border:1px solid var(--br);border-radius:12px;padding:14px;margin:12px 0;box-shadow:0 1px 4px rgba(15,23,42,.06)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.tag{font-size:12px;color:var(--muted)}
+.badge{font-size:12px;background:#eef2ff;color:#3730a3;padding:4px 10px;border-radius:10px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.chip{font-size:11px;background:#ecfeff;color:#0e7490;border:1px solid #a5f3fc;padding:2px 8px;border-radius:999px;margin-left:6px;white-space:nowrap}
+.choice{display:flex;gap:10px;align-items:center;padding:10px;border:1px solid var(--br);border-radius:10px;margin:8px 0;background:#f8fafc}
+.choice img{flex:0 0 auto}
+.choice a{color:var(--ink);text-decoration:none}
+.choice a:focus,.choice a:hover{color:var(--accent);text-decoration:underline}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+button{appearance:none;background:var(--accent);border:0;color:#fff;border-radius:10px;padding:12px 14px;font-weight:700;box-shadow:0 1px 3px rgba(37,99,235,.35)}
+button.secondary{background:#fff;color:var(--ink);border:1px solid var(--br);box-shadow:none}
+.footer-note{color:var(--muted);font-size:13px;margin-top:12px;text-align:center}
+hr{border:0;border-top:1px solid var(--br);margin:10px 0}
+.small{font-size:12px;color:var(--muted)}
+.li{list-style:none;padding:0;margin:0}
+.qty{font-variant-numeric:tabular-nums;color:var(--muted)}
+.old{display:flex;gap:10px;align-items:center;flex:1;min-width:0}
+@media (max-width:480px){ .badge{margin-top:4px; width:100%; justify-content:center;} }
+</style>
 	</head>
 	<body>
-	<div class="container" id="lp-mpr-standalone"
-		 data-ajax="<?php echo esc_attr( admin_url( 'admin-ajax.php' ) ); ?>"
-		 data-order-id="<?php echo esc_attr( $order_id ); ?>"
-		 data-order-key="<?php echo esc_attr( $order_key ); ?>"
-		 data-nonce="<?php echo esc_attr( wp_create_nonce( 'lp_mpr_portal_action' ) ); ?>"
-		 data-issue-ver="<?php echo esc_attr( $ver ); ?>">
-		<h1><?php echo esc_html__( 'Erstatninger for manglende varer', 'lilleprinsen' ); ?></h1>
+<div class="container" id="lp-mpr-standalone"
+         data-ajax="<?php echo esc_attr( admin_url( 'admin-ajax.php' ) ); ?>"
+         data-order-id="<?php echo esc_attr( $order_id ); ?>"
+         data-order-key="<?php echo esc_attr( $order_key ); ?>"
+         data-nonce="<?php echo esc_attr( wp_create_nonce( 'lp_mpr_portal_action' ) ); ?>"
+         data-issue-ver="<?php echo esc_attr( $ver ); ?>">
+<div class="hero">
+<div class="emoji">🤗</div>
+<div>
+<p class="title"><?php echo sprintf( esc_html__( 'Hei %s!', 'lilleprinsen' ), esc_html( $customer_name ) ); ?></p>
+<p class="subtitle"><?php echo esc_html__( 'Vi fant alternativer for varene som mangler. Kryss av det du ønsker – resten fikser vi. ✨', 'lilleprinsen' ); ?></p>
+</div>
+</div>
 
-		<?php
-		// Minimal, tydelig informasjon
-		echo '<div class="infobox">';
-		if ( $cnt_customer_pays && $cnt_store_covers ) {
-			printf(
-				'<p><strong>%s</strong> %s</p><p class="small">%s</p>',
-				esc_html__( 'Viktig:', 'lilleprinsen' ),
-				esc_html__( 'Noen alternativer er merket «Kunde betaler» (kan gi mellomlegg), andre «Butikken dekker» (ingen ekstra kostnad). Se merking ved hvert forslag.', 'lilleprinsen' ),
-				sprintf(
-					esc_html__( 'Du kan krysse av flere forslag, men maks likt antallet som mangler. Ved mellomlegg får du en betalingslenke, og varene holdes av i ca. %d min.', 'lilleprinsen' ),
-					(int) $ttl_minutes
-				)
-			);
-		} elseif ( $cnt_customer_pays ) {
-			printf(
-				'<p><strong>%s</strong> %s</p><p class="small">%s</p>',
-				esc_html__( 'Merk:', 'lilleprinsen' ),
-				esc_html__( 'Dersom valgte alternativ er dyrere enn originalen, betaler du mellomlegget. Du får en betalingslenke etter godkjenning.', 'lilleprinsen' ),
-				sprintf( esc_html__( 'Varer holdes av i ca. %d min etter godkjenning.', 'lilleprinsen' ), (int) $ttl_minutes )
-			);
-		} else {
-			echo '<p><strong>' . esc_html__( 'Godt nytt:', 'lilleprinsen' ) . '</strong> ' . esc_html__( 'Butikken dekker eventuelt mellomlegg. Du betaler ikke mer enn opprinnelig pris.', 'lilleprinsen' ) . '</p>';
-		}
-		echo '</div>';
+<div class="pills">
+<span class="pill"><span class="emoji">⏱️</span><span><?php printf( esc_html__( 'Vi holder av valgene dine i ca. %d min.', 'lilleprinsen' ), (int) $ttl_minutes ); ?></span></span>
+<?php if ( $cnt_customer_pays && $cnt_store_covers ) : ?>
+<span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Noen alternativer kan gi et lite mellomlegg.', 'lilleprinsen' ); ?></span></span>
+<span class="pill"><span class="emoji">🛡️</span><span><?php echo esc_html__( 'Andre alternativer dekker butikken helt.', 'lilleprinsen' ); ?></span></span>
+<?php elseif ( $cnt_customer_pays ) : ?>
+<span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Mellomlegg betales kun om du velger dyrere vare.', 'lilleprinsen' ); ?></span></span>
+<?php else : ?>
+<span class="pill"><span class="emoji">✅</span><span><?php echo esc_html__( 'Butikken dekker eventuelle prisforskjeller.', 'lilleprinsen' ); ?></span></span>
+<?php endif; ?>
+<span class="pill"><span class="emoji">🧾</span><span><?php echo esc_html__( 'Velg én eller flere forslag, maks likt antallet som mangler.', 'lilleprinsen' ); ?></span></span>
+</div>
 
-		if ( empty( $data ) ) {
-			echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkurat nå.', 'lilleprinsen' ) . '</p></div>';
-		}
+<?php
+if ( empty( $data ) ) {
+echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkurat nå.', 'lilleprinsen' ) . '</p></div>';
+}
 
 		foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
 			$key = (string) $item_id;
