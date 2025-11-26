@@ -717,17 +717,16 @@ function lp_mpr_portal_action() {
 
 	if ( ! wp_verify_nonce( $nonce, 'lp_mpr_portal_action' ) ) wp_send_json_error( array( 'message' => __( 'Sikkerhetssjekk feilet.', 'lilleprinsen' ) ) );
 
-	$order = $order_id ? wc_get_order( $order_id ) : false;
-	if ( ! $order ) wp_send_json_error( array( 'message' => __( 'Fant ikke ordren.', 'lilleprinsen' ) ) );
+        $order = $order_id ? wc_get_order( $order_id ) : false;
+        if ( ! $order ) wp_send_json_error( array( 'message' => __( 'Fant ikke ordren.', 'lilleprinsen' ) ) );
 
-	// Sjekk kunde-kontekst
-	$ok_context = false;
-	if ( is_user_logged_in() ) {
-		$ok_context = ( (int) $order->get_user_id() === (int) get_current_user_id() ) || current_user_can( 'edit_shop_order', $order_id );
-	} else {
-		$ok_context = ( $order_key && $order->get_order_key() === $order_key );
-	}
-	if ( ! $ok_context ) wp_send_json_error( array( 'message' => __( 'Du har ikke tilgang til denne ordren.', 'lilleprinsen' ) ) );
+        // Sjekk kunde-kontekst (lenke med order-key skal alltid fungere)
+        $valid_key = $order_key && hash_equals( (string) $order->get_order_key(), (string) $order_key );
+        $ok_context = $valid_key;
+        if ( ! $ok_context && is_user_logged_in() ) {
+                $ok_context = ( (int) $order->get_user_id() === (int) get_current_user_id() ) || current_user_can( 'edit_shop_order', $order_id );
+        }
+        if ( ! $ok_context ) wp_send_json_error( array( 'message' => __( 'Du har ikke tilgang til denne ordren.', 'lilleprinsen' ) ) );
 
 	// liten throttle
 	$ip   = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '0.0.0.0';
@@ -1477,14 +1476,13 @@ add_action( 'template_redirect', function(){
 
 	$order = wc_get_order( $order_id ); if ( ! $order ) return;
 
-	// Sikkerhetskontekst
-	$ok = false;
-	if ( is_user_logged_in() ) {
-		$ok = ( (int) $order->get_user_id() === (int) get_current_user_id() ) || current_user_can( 'edit_shop_order', $order_id );
-	} else {
-		$ok = ( $order_key && $order->get_order_key() === $order_key );
-	}
-	if ( ! $ok ) { status_header( 403 ); echo esc_html__( 'Du har ikke tilgang til denne siden.', 'lilleprinsen' ); exit; }
+        // Sikkerhetskontekst (lenke med order-key skal alltid fungere)
+        $valid_key = $order_key && hash_equals( (string) $order->get_order_key(), (string) $order_key );
+        $ok = $valid_key;
+        if ( ! $ok && is_user_logged_in() ) {
+                $ok = ( (int) $order->get_user_id() === (int) get_current_user_id() ) || current_user_can( 'edit_shop_order', $order_id );
+        }
+        if ( ! $ok ) { status_header( 403 ); echo esc_html__( 'Du har ikke tilgang til denne siden.', 'lilleprinsen' ); exit; }
 
 	// Ikke cache
 	nocache_headers();
