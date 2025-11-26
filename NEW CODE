@@ -54,12 +54,13 @@ if ( ! function_exists( 'lp_missing__get_secret' ) ) {
 	}
 }
 if ( ! function_exists( 'lp_missing__sign' ) ) {
-	function lp_missing__sign( $order_id, $email ) {
-		$oid    = absint( $order_id );
-		$em     = strtolower( trim( (string) $email ) );
-		$secret = lp_missing__get_secret();
-		return hash_hmac( 'sha256', "{$oid}|{$em}", $secret );
-	}
+        function lp_missing__sign( $order_id, $email, $expires = 0 ) {
+                $oid    = absint( $order_id );
+                $em     = strtolower( trim( (string) $email ) );
+                $exp    = absint( $expires );
+                $secret = lp_missing__get_secret();
+                return hash_hmac( 'sha256', "{$oid}|{$em}|{$exp}", $secret );
+        }
 }
 
 /* Basic rate limit per order/email */
@@ -670,12 +671,16 @@ if ( ! function_exists( 'lp_missing_save_metabox' ) ) {
 		$order = wc_get_order( $order_id );
 		if ( ! $order ) { return; }
 
-		foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
-			if ( ! ( $item instanceof WC_Order_Item_Product ) ) { continue; }
+                $has_missing = false;
 
-			$iid = absint( $item_id );
-			$is_checked = isset( $_POST[ 'lp_missing_' . $iid . '_mark_missing' ] );
-			if ( ! $is_checked ) { lp_missing_clear_item( $order_id, $iid ); continue; }
+                foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
+                        if ( ! ( $item instanceof WC_Order_Item_Product ) ) { continue; }
+
+                        $iid = absint( $item_id );
+                        $is_checked = isset( $_POST[ 'lp_missing_' . $iid . '_mark_missing' ] );
+                        if ( ! $is_checked ) { lp_missing_clear_item( $order_id, $iid ); continue; }
+
+                        $has_missing = true;
 
 			$qty_missing  = isset( $_POST[ 'lp_missing_' . $iid . '_qty_missing' ] ) ? max( 0, absint( $_POST[ 'lp_missing_' . $iid . '_qty_missing' ] ) ) : 0;
 			$notes        = isset( $_POST[ 'lp_missing_' . $iid . '_notes' ] ) ? sanitize_textarea_field( wp_unslash( $_POST[ 'lp_missing_' . $iid . '_notes' ] ) ) : '';
@@ -717,10 +722,10 @@ if ( ! function_exists( 'lp_missing_save_metabox' ) ) {
 			$curr = isset( $map[ $iid ] ) ? $map[ $iid ] : array();
 
 			$line = $order->get_item( $iid );
-			if ( $line instanceof WC_Order_Item_Product ) {
-				$product = $line->get_product();
-				$qty_missing_now = isset( $curr['qty_missing'] ) ? max( 0, absint( $curr['qty_missing'] ) ) : 0;
-				$qty_locked_prev = isset( $curr['stock_locked_qty'] ) ? max( 0, absint( $curr['stock_locked_qty'] ) ) : 0;
+                        if ( $line instanceof WC_Order_Item_Product ) {
+                                $product = $line->get_product();
+                                $qty_missing_now = isset( $curr['qty_missing'] ) ? max( 0, absint( $curr['qty_missing'] ) ) : 0;
+                                $qty_locked_prev = isset( $curr['stock_locked_qty'] ) ? max( 0, absint( $curr['stock_locked_qty'] ) ) : 0;
 
 				$delta = $qty_missing_now - $qty_locked_prev;
 				if ( $delta !== 0 && $product ) {
@@ -730,13 +735,19 @@ if ( ! function_exists( 'lp_missing_save_metabox' ) ) {
 					$curr['stock_locked_qty'] = $qty_missing_now;
 					$map[ $iid ] = $curr;
 					$order->update_meta_data( '_lp_missing_items', $map );
-					$order->save();
-				}
-			}
-		}
+                                        $order->save();
+                                }
+                        }
+                }
 
-		/* If parent has surcharge children, show link summary (optional UI already handled in render) */
-	}
+                if ( $has_missing ) {
+                        lp_missing__maybe_set_on_hold_for_missing( $order );
+                } else {
+                        lp_missing__maybe_resume_after_resolution( $order );
+                }
+
+                /* If parent has surcharge children, show link summary (optional UI already handled in render) */
+        }
 	add_action( 'woocommerce_process_shop_order_meta', 'lp_missing_save_metabox', 10, 2 );
 }
 /* ================================================================
@@ -744,15 +755,17 @@ if ( ! function_exists( 'lp_missing_save_metabox' ) ) {
  * ================================================================ */
 
 if ( ! function_exists( 'lp_missing_make_portal_link' ) ) {
-	function lp_missing_make_portal_link( $order, $base_url = '' ) {
-		$order_obj = ( $order instanceof WC_Order ) ? $order : wc_get_order( absint( $order ) );
-		if ( ! $order_obj ) { return ''; }
-		$oid   = absint( $order_obj->get_id() );
-		$email = (string) $order_obj->get_billing_email();
-		$key   = lp_missing__sign( $oid, $email );
-		$base  = $base_url && filter_var( $base_url, FILTER_VALIDATE_URL ) ? $base_url : home_url( '/' );
-		return add_query_arg( array( 'oid' => $oid, 'key' => $key ), $base );
-	}
+        function lp_missing_make_portal_link( $order, $base_url = '' ) {
+                $order_obj = ( $order instanceof WC_Order ) ? $order : wc_get_order( absint( $order ) );
+                if ( ! $order_obj ) { return ''; }
+                $oid   = absint( $order_obj->get_id() );
+                $email = (string) $order_obj->get_billing_email();
+                $ttl   = max( MINUTE_IN_SECONDS, absint( apply_filters( 'lp_missing_portal_ttl', DAY_IN_SECONDS ) ) );
+                $exp   = time() + $ttl;
+                $key   = lp_missing__sign( $oid, $email, $exp );
+                $base  = $base_url && filter_var( $base_url, FILTER_VALIDATE_URL ) ? $base_url : home_url( '/' );
+                return add_query_arg( array( 'oid' => $oid, 'key' => $key, 'exp' => $exp ), $base );
+        }
 }
 
 if ( ! function_exists( 'lp_missing__portal_get_map' ) ) {
@@ -762,10 +775,10 @@ if ( ! function_exists( 'lp_missing__portal_get_map' ) ) {
 }
 
 if ( ! function_exists( 'lp_missing__portal_update_entry' ) ) {
-	function lp_missing__portal_update_entry( $order, $item_id, $new_fields ) {
-		$order_id = ( $order instanceof WC_Order ) ? $order->get_id() : absint( $order );
-		$order    = ( $order instanceof WC_Order ) ? $order : wc_get_order( $order_id );
-		if ( ! $order ) { return false; }
+        function lp_missing__portal_update_entry( $order, $item_id, $new_fields ) {
+                $order_id = ( $order instanceof WC_Order ) ? $order->get_id() : absint( $order );
+                $order    = ( $order instanceof WC_Order ) ? $order : wc_get_order( $order_id );
+                if ( ! $order ) { return false; }
 
 		$map  = lp_missing__portal_get_map( $order_id );
 		$prev = isset( $map[ $item_id ] ) ? $map[ $item_id ] : array();
@@ -795,21 +808,154 @@ if ( ! function_exists( 'lp_missing__portal_update_entry' ) ) {
 		$order->save();
 
 		do_action( 'lp_missing_item_updated', $order_id, absint( $item_id ), $curr );
-		return true;
-	}
+                return true;
+        }
+}
+
+if ( ! function_exists( 'lp_missing__maybe_set_on_hold_for_missing' ) ) {
+        function lp_missing__maybe_set_on_hold_for_missing( WC_Order $order ) {
+                if ( $order->has_status( array( 'processing', 'completed' ) ) ) {
+                        $order->update_status( 'on-hold', __( 'Order placed on hold while awaiting customer decision on missing items.', 'lilleprinsen' ) );
+                }
+        }
+}
+
+if ( ! function_exists( 'lp_missing__maybe_resume_after_resolution' ) ) {
+        function lp_missing__maybe_resume_after_resolution( WC_Order $order ) {
+                $map = lp_missing_get_all( $order->get_id() );
+                foreach ( $map as $entry ) {
+                        if ( isset( $entry['status'] ) && $entry['status'] === 'missing' ) {
+                                return;
+                        }
+                }
+
+                if ( $order->has_status( 'on-hold' ) ) {
+                        if ( $order->is_paid() ) {
+                                $order->update_status( 'processing', __( 'Missing items resolved; order resumed.', 'lilleprinsen' ) );
+                        } else {
+                                $order->add_order_note( __( 'Missing items resolved. Payment incomplete; review before fulfillment.', 'lilleprinsen' ) );
+                        }
+                }
+        }
+}
+
+if ( ! function_exists( 'lp_missing__apply_resolution_to_order' ) ) {
+        function lp_missing__apply_resolution_to_order( WC_Order $order, $item_id, array $entry, array $args = array() ) {
+                $action      = isset( $args['action'] ) ? (string) $args['action'] : '';
+                $alt_product = isset( $args['alt_product'] ) && $args['alt_product'] instanceof WC_Product ? $args['alt_product'] : null;
+                $qty_alt     = isset( $args['qty_alt'] ) ? absint( $args['qty_alt'] ) : 0;
+
+                $line = $order->get_item( $item_id );
+                if ( ! ( $line instanceof WC_Order_Item_Product ) ) {
+                        return new WP_Error( 'lp_missing_invalid_item', __( 'We could not update this line item.', 'lilleprinsen' ) );
+                }
+
+                $product      = $line->get_product();
+                $qty_refunded = method_exists( $order, 'get_qty_refunded_for_item' ) ? absint( $order->get_qty_refunded_for_item( $item_id ) ) : 0;
+                $orig_qty     = max( 0, absint( $line->get_quantity() ) - $qty_refunded );
+                if ( $orig_qty <= 0 ) {
+                        return new WP_Error( 'lp_missing_refunded', __( 'This line item has already been refunded and cannot be changed here.', 'lilleprinsen' ) );
+                }
+
+                $qty_missing = min( $orig_qty, max( 0, absint( isset( $entry['qty_missing'] ) ? $entry['qty_missing'] : 0 ) ) );
+                $lock_prev   = max( 0, absint( isset( $entry['stock_locked_qty'] ) ? $entry['stock_locked_qty'] : 0 ) );
+
+                $map    = lp_missing_get_all( $order->get_id() );
+                $curr   = isset( $map[ $item_id ] ) && is_array( $map[ $item_id ] ) ? $map[ $item_id ] : array();
+                $choice = isset( $curr['choice'] ) ? sanitize_key( $curr['choice'] ) : '';
+
+                $new_lock = $qty_missing;
+                if ( $qty_missing <= 0 ) {
+                        return new WP_Error( 'lp_missing_none_flagged', __( 'There is no remaining missing quantity to resolve for this line.', 'lilleprinsen' ) );
+                }
+
+                if ( 'accept_alt' === $action ) {
+                        if ( ! $alt_product ) {
+                                return new WP_Error( 'lp_missing_alt_not_found', __( 'We could not add the alternative product to your order.', 'lilleprinsen' ) );
+                        }
+
+                        $qty_alt      = max( 1, min( $qty_alt, max( 1, $qty_missing ) ) );
+                        $choice       = $qty_alt < $qty_missing ? 'alternative_accepted_split' : 'alternative_accepted';
+                        $new_lock     = min( max( 0, $qty_missing - $qty_alt ), max( 0, $orig_qty - $qty_alt ) );
+                        $qty_to_drop  = min( $qty_alt, $orig_qty );
+                        $qty_after    = max( 0, $orig_qty - $qty_alt );
+
+                        if ( $qty_to_drop > 0 ) {
+                                if ( $qty_after <= 0 ) {
+                                        $order->remove_item( $line->get_id() );
+                                } else {
+                                        $line->set_quantity( $qty_after );
+                                        $line->save();
+                                }
+
+                                lp_missing__adjust_stock( $product, $qty_to_drop, 'increase' );
+                                lp_missing__log_stock( $order, $product, $qty_to_drop, 'increase', __( 'Restocked original item after alternative approval.', 'lilleprinsen' ) );
+                        }
+
+                        $order->add_product( $alt_product, $qty_alt );
+                        lp_missing__adjust_stock( $alt_product, $qty_alt, 'decrease' );
+                        lp_missing__log_stock( $order, $alt_product, $qty_alt, 'decrease', __( 'Reserved stock for approved alternative.', 'lilleprinsen' ) );
+                } elseif ( 'accept_delete' === $action ) {
+                        $qty_to_drop = min( $qty_missing, $orig_qty );
+                        if ( $qty_to_drop <= 0 ) {
+                                return new WP_Error( 'lp_missing_nothing_to_delete', __( 'There is no remaining quantity to delete for this line.', 'lilleprinsen' ) );
+                        }
+
+                        $new_lock    = 0;
+                        $choice      = 'deletion_accepted';
+                        $qty_after   = max( 0, $orig_qty - $qty_to_drop );
+
+                        if ( $qty_after <= 0 ) {
+                                $order->remove_item( $line->get_id() );
+                        } else {
+                                $line->set_quantity( $qty_after );
+                                $line->save();
+                        }
+
+                        lp_missing__adjust_stock( $product, $qty_to_drop, 'increase' );
+                        lp_missing__log_stock( $order, $product, $qty_to_drop, 'increase', __( 'Restocked after customer approved deletion.', 'lilleprinsen' ) );
+                } else {
+                        return new WP_Error( 'lp_missing_unknown_action', __( 'Unknown resolution type.', 'lilleprinsen' ) );
+                }
+
+                $lock_delta = $new_lock - $lock_prev;
+                if ( $lock_delta !== 0 && $product ) {
+                        lp_missing__adjust_stock( $product, abs( $lock_delta ), $lock_delta > 0 ? 'decrease' : 'increase' );
+                        lp_missing__log_stock( $order, $product, abs( $lock_delta ), $lock_delta > 0 ? 'decrease' : 'increase', __( 'Adjusted missing-item stock lock.', 'lilleprinsen' ) );
+                }
+
+                $map[ $item_id ] = array_merge( $curr, array(
+                        'status'             => $new_lock > 0 ? 'missing' : ( 'accept_delete' === $action ? 'removed' : 'resolved' ),
+                        'choice'             => $choice,
+                        'selected_alt_id'    => $alt_product ? $alt_product->get_id() : 0,
+                        'qty_alt'            => 'accept_alt' === $action ? $qty_alt : 0,
+                        'qty_missing'        => $new_lock,
+                        'stock_locked_qty'   => $new_lock,
+                ) );
+
+                $order->update_meta_data( '_lp_missing_items', $map );
+                $order->calculate_totals( true );
+                $order->save();
+                do_action( 'lp_missing_item_updated', $order->get_id(), absint( $item_id ), $map[ $item_id ] );
+
+                lp_missing__maybe_resume_after_resolution( $order );
+
+                return $map[ $item_id ];
+        }
 }
 
 if ( ! function_exists( 'lp_missing__shortcode_portal' ) ) {
 	function lp_missing__shortcode_portal() {
-		$oid = isset( $_GET['oid'] ) ? absint( $_GET['oid'] ) : 0;
-		$key = isset( $_GET['key'] ) ? sanitize_text_field( wp_unslash( $_GET['key'] ) ) : '';
+                $oid = isset( $_GET['oid'] ) ? absint( $_GET['oid'] ) : 0;
+                $key = isset( $_GET['key'] ) ? sanitize_text_field( wp_unslash( $_GET['key'] ) ) : '';
+                $exp = isset( $_GET['exp'] ) ? absint( $_GET['exp'] ) : 0;
 
 		ob_start();
 
-		if ( $oid <= 0 || $key === '' ) {
-			echo '<div class="lp-missing-portal lp-missing-error"><p>' . esc_html__( 'We could not validate your link. Please use the latest link we sent you.', 'lilleprinsen' ) . '</p></div>';
-			return ob_get_clean();
-		}
+                if ( $oid <= 0 || $key === '' ) {
+                        echo '<div class="lp-missing-portal lp-missing-error"><p>' . esc_html__( 'We could not validate your link. Please use the latest link we sent you.', 'lilleprinsen' ) . '</p></div>';
+                        return ob_get_clean();
+                }
 
 		$order = wc_get_order( $oid );
 		if ( ! $order ) {
@@ -817,12 +963,17 @@ if ( ! function_exists( 'lp_missing__shortcode_portal' ) ) {
 			return ob_get_clean();
 		}
 
-		$order_email = (string) $order->get_billing_email();
-		$expected    = lp_missing__sign( $oid, $order_email );
-		if ( ! hash_equals( $expected, $key ) ) {
-			echo '<div class="lp-missing-portal lp-missing-error"><p>' . esc_html__( 'Your link is invalid or has expired. Please request a new link.', 'lilleprinsen' ) . '</p></div>';
-			return ob_get_clean();
-		}
+                $order_email = (string) $order->get_billing_email();
+                if ( $exp > 0 && $exp < time() ) {
+                        echo '<div class="lp-missing-portal lp-missing-error"><p>' . esc_html__( 'Your link is invalid or has expired. Please request a new link.', 'lilleprinsen' ) . '</p></div>';
+                        return ob_get_clean();
+                }
+
+                $expected = lp_missing__sign( $oid, $order_email, $exp );
+                if ( ! hash_equals( $expected, $key ) ) {
+                        echo '<div class="lp-missing-portal lp-missing-error"><p>' . esc_html__( 'Your link is invalid or has expired. Please request a new link.', 'lilleprinsen' ) . '</p></div>';
+                        return ob_get_clean();
+                }
 
 		/* Viewer email step (with nonce) */
 		$viewer_email = '';
@@ -869,34 +1020,40 @@ if ( ! function_exists( 'lp_missing__shortcode_portal' ) ) {
 			return ob_get_clean();
 		}
 
-		/* POST Actions — nonce + rate limit (10/min per order/email) */
-		$notices = array();
-		if ( isset( $_POST['lp_missing_action'] ) ) {
-			$action  = sanitize_key( wp_unslash( $_POST['lp_missing_action'] ) );
-			$item_id = isset( $_POST['lp_missing_item_id'] ) ? absint( $_POST['lp_missing_item_id'] ) : 0;
-			$alt_id  = isset( $_POST['lp_missing_alt_id'] ) ? absint( $_POST['lp_missing_alt_id'] ) : 0;
-			$qty_alt = isset( $_POST['lp_missing_qty_alt'] ) ? absint( $_POST['lp_missing_qty_alt'] ) : 0;
-			$nonce   = isset( $_POST['lp_missing_nonce'] ) ? $_POST['lp_missing_nonce'] : '';
+                /* POST Actions — nonce + rate limit (10/min per order/email) */
+                $notices    = array();
+                $flash_key  = isset( $_GET['lp_missing_notice'] ) ? sanitize_key( wp_unslash( $_GET['lp_missing_notice'] ) ) : '';
+                $flash_data = $flash_key ? get_transient( $flash_key ) : false;
+                if ( is_array( $flash_data ) ) {
+                        $notices = array_merge( $notices, $flash_data );
+                        delete_transient( $flash_key );
+                }
 
-			if ( ! lp_missing_verify_nonce( $nonce, 'portal_' . $oid . '|' . $key ) ) {
-				$notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'Your session could not be verified. Please refresh and try again.', 'lilleprinsen' ) );
-			} elseif ( ! lp_missing_rate_limit_allow( $oid, $viewer_email, 10, 60 ) ) {
-				$notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'Too many requests. Please wait a minute before trying again.', 'lilleprinsen' ) );
-			} else {
-				$map = lp_missing__portal_get_map( $oid );
-				if ( $item_id <= 0 || ! isset( $map[ $item_id ] ) ) {
-					$notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'We could not find that item on your order.', 'lilleprinsen' ) );
-				} else {
-					$entry   = $map[ $item_id ];
-					$status  = isset( $entry['status'] ) ? (string) $entry['status'] : '';
-					$qty_mis = isset( $entry['qty_missing'] ) ? max( 0, absint( $entry['qty_missing'] ) ) : 0;
-					$suggs   = isset( $entry['suggested_products'] ) && is_array( $entry['suggested_products'] ) ? array_map( 'absint', $entry['suggested_products'] ) : array();
-					$propdel = ! empty( $entry['propose_delete'] ) ? 1 : 0;
+                if ( isset( $_POST['lp_missing_action'] ) ) {
+                        $action  = sanitize_key( wp_unslash( $_POST['lp_missing_action'] ) );
+                        $item_id = isset( $_POST['lp_missing_item_id'] ) ? absint( wp_unslash( $_POST['lp_missing_item_id'] ) ) : 0;
+                        $alt_id  = isset( $_POST['lp_missing_alt_id'] ) ? absint( wp_unslash( $_POST['lp_missing_alt_id'] ) ) : 0;
+                        $qty_alt = isset( $_POST['lp_missing_qty_alt'] ) ? absint( wp_unslash( $_POST['lp_missing_qty_alt'] ) ) : 0;
+                        $nonce   = isset( $_POST['lp_missing_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['lp_missing_nonce'] ) ) : '';
 
-					if ( 'missing' !== $status ) {
-						$notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'This item is no longer awaiting a decision.', 'lilleprinsen' ) );
-					} else {
-						$ok = false;
+                        if ( ! lp_missing_verify_nonce( $nonce, 'portal_' . $oid . '|' . $key . '|' . $exp ) ) {
+                                $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'Your session could not be verified. Please refresh and try again.', 'lilleprinsen' ) );
+                        } elseif ( ! lp_missing_rate_limit_allow( $oid, $viewer_email, 10, 60 ) ) {
+                                $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'Too many requests. Please wait a minute before trying again.', 'lilleprinsen' ) );
+                        } else {
+                                $map = lp_missing__portal_get_map( $oid );
+                                if ( $item_id <= 0 || ! isset( $map[ $item_id ] ) ) {
+                                        $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'We could not find that item on your order.', 'lilleprinsen' ) );
+                                } else {
+                                        $entry   = $map[ $item_id ];
+                                        $status  = isset( $entry['status'] ) ? (string) $entry['status'] : '';
+                                        $qty_mis = isset( $entry['qty_missing'] ) ? max( 0, absint( $entry['qty_missing'] ) ) : 0;
+                                        $suggs   = isset( $entry['suggested_products'] ) && is_array( $entry['suggested_products'] ) ? array_map( 'absint', $entry['suggested_products'] ) : array();
+                                        $propdel = ! empty( $entry['propose_delete'] ) ? 1 : 0;
+
+                                        if ( 'missing' !== $status ) {
+                                                $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'This item is no longer awaiting a decision.', 'lilleprinsen' ) );
+                                        } else {
                                                 if ( 'accept_alt' === $action ) {
                                                         if ( $alt_id > 0 && in_array( $alt_id, $suggs, true ) ) {
                                                                 $alt_product = wc_get_product( $alt_id );
@@ -913,48 +1070,55 @@ if ( ! function_exists( 'lp_missing__shortcode_portal' ) ) {
                                                                         }
 
                                                                         if ( $qty_alt > 0 ) {
-                                                                                $choice  = ( $qty_alt < $qty_mis ) ? 'alternative_accepted_split' : 'alternative_accepted';
-                                                                                $ok = lp_missing__portal_update_entry( $order, $item_id, array(
-                                                                                        'status'          => 'resolved',
-                                                                                        'choice'          => $choice,
-                                                                                        'selected_alt_id' => $alt_id,
-                                                                                        'qty_alt'         => $qty_alt,
+                                                                                $result = lp_missing__apply_resolution_to_order( $order, $item_id, $entry, array(
+                                                                                        'action'      => 'accept_alt',
+                                                                                        'alt_product' => $alt_product,
+                                                                                        'qty_alt'     => $qty_alt,
                                                                                 ) );
-                                                                                $notices[] = $ok
-                                                                                        ? array( 'type' => 'success', 'msg' => esc_html__( 'Thanks! Your choice has been saved.', 'lilleprinsen' ) )
-                                                                                        : array( 'type' => 'error', 'msg' => esc_html__( 'We could not save your choice. Please try again.', 'lilleprinsen' ) );
+                                                                                if ( is_wp_error( $result ) ) {
+                                                                                        $notices[] = array( 'type' => 'error', 'msg' => esc_html( $result->get_error_message() ) );
+                                                                                } else {
+                                                                                        $notices[] = array( 'type' => 'success', 'msg' => esc_html__( 'Thanks! Your choice has been saved and your order was updated.', 'lilleprinsen' ) );
+                                                                                }
                                                                         }
                                                                 }
                                                         } else {
                                                                 $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'The selected alternative is not available.', 'lilleprinsen' ) );
                                                         }
                                                 } elseif ( 'decline_alt' === $action ) {
-							$ok = lp_missing__portal_update_entry( $order, $item_id, array(
-								'status' => 'missing',
-								'choice' => 'alternative_declined',
-							) );
-							$notices[] = $ok
-								? array( 'type' => 'success', 'msg' => esc_html__( 'Thanks! We will follow up with another option.', 'lilleprinsen' ) )
-								: array( 'type' => 'error', 'msg' => esc_html__( 'We could not save your choice. Please try again.', 'lilleprinsen' ) );
-						} elseif ( 'accept_delete' === $action ) {
-							if ( $propdel ) {
-								$ok = lp_missing__portal_update_entry( $order, $item_id, array(
-									'status' => 'removed',
-									'choice' => 'deletion_accepted',
-								) );
-								$notices[] = $ok
-									? array( 'type' => 'success', 'msg' => esc_html__( 'Thanks! You accepted removal of this item.', 'lilleprinsen' ) )
-									: array( 'type' => 'error', 'msg' => esc_html__( 'We could not save your choice. Please try again.', 'lilleprinsen' ) );
-							} else {
-								$notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'Deletion is not currently proposed for this item.', 'lilleprinsen' ) );
-							}
-						} else {
-							$notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'Unknown action.', 'lilleprinsen' ) );
-						}
-					}
-				}
-			}
-		}
+                                                        $ok = lp_missing__portal_update_entry( $order, $item_id, array(
+                                                                'status' => 'missing',
+                                                                'choice' => 'alternative_declined',
+                                                        ) );
+                                                        $notices[] = $ok
+                                                                ? array( 'type' => 'success', 'msg' => esc_html__( 'Thanks! We will follow up with another option.', 'lilleprinsen' ) )
+                                                                : array( 'type' => 'error', 'msg' => esc_html__( 'We could not save your choice. Please try again.', 'lilleprinsen' ) );
+                                                } elseif ( 'accept_delete' === $action ) {
+                                                        if ( $propdel ) {
+                                                                $result = lp_missing__apply_resolution_to_order( $order, $item_id, $entry, array( 'action' => 'accept_delete' ) );
+                                                                $notices[] = is_wp_error( $result )
+                                                                        ? array( 'type' => 'error', 'msg' => esc_html( $result->get_error_message() ) )
+                                                                        : array( 'type' => 'success', 'msg' => esc_html__( 'Thanks! You accepted removal of this item and we updated your order.', 'lilleprinsen' ) );
+                                                        } else {
+                                                                $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'Deletion is not currently proposed for this item.', 'lilleprinsen' ) );
+                                                        }
+                                                } else {
+                                                        $notices[] = array( 'type' => 'error', 'msg' => esc_html__( 'Unknown action.', 'lilleprinsen' ) );
+                                                }
+                                        }
+                                }
+                        }
+
+                        $flash_id = 'lp_missing_flash_' . wp_generate_uuid4();
+                        set_transient( $flash_id, $notices, MINUTE_IN_SECONDS );
+
+                        $redirect_base = isset( $_SERVER['REQUEST_URI'] ) ? wp_unslash( (string) $_SERVER['REQUEST_URI'] ) : '';
+                        $redirect_base = remove_query_arg( array( 'lp_missing_notice', 'lp_missing_action', 'lp_missing_item_id', 'lp_missing_alt_id', 'lp_missing_qty_alt', 'lp_missing_nonce' ), $redirect_base );
+                        $redirect_url  = add_query_arg( 'lp_missing_notice', $flash_id, $redirect_base );
+
+                        wp_safe_redirect( $redirect_url ? $redirect_url : home_url( '/' ) );
+                        exit;
+                }
 
 		$map   = lp_missing__portal_get_map( $oid );
 		$items = $order->get_items( 'line_item' );
@@ -971,7 +1135,7 @@ if ( ! function_exists( 'lp_missing__shortcode_portal' ) ) {
 		echo '<p>' . sprintf( esc_html__( 'Order #%1$s', 'lilleprinsen' ), esc_html( $order->get_order_number() ) ) . '</p>';
 
 		$shown = 0;
-		$nonce_value = lp_missing_make_nonce( 'portal_' . $oid . '|' . $key );
+                $nonce_value = lp_missing_make_nonce( 'portal_' . $oid . '|' . $key . '|' . $exp );
 
 		if ( ! empty( $items ) && is_array( $map ) ) {
 			foreach ( $items as $item_id => $item ) {
