@@ -2517,28 +2517,36 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 
         $current_total = (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
         $paid_on_other_order = 0.0; $fee_reason = ''; $fee_order = null;
+        $stored_fee_order_id = (int) $order->get_meta( '_lp_mpr_child_fee_order_id', true );
+        $clear_child_fee_meta = $fee_order_id > 0;
+
         if ( $fee_order_id ) {
                 $fee_order = wc_get_order( $fee_order_id );
         }
 
         // Fallback: hvis vi ikke fikk med ID-en som argument (f.eks. etter manuell kjøring),
         // sjekk lagret tilleggsordre og bruk den dersom den faktisk er betalt.
-        if ( ! $fee_order ) {
-                $maybe_fee_id = (int) $order->get_meta( '_lp_mpr_child_fee_order_id', true );
-                if ( $maybe_fee_id ) {
-                        $maybe_fee = wc_get_order( $maybe_fee_id );
-                        if ( $maybe_fee && $maybe_fee->is_paid() ) {
-                                $fee_order    = $maybe_fee;
-                                $fee_order_id = $maybe_fee_id;
-                        }
+        if ( ! $fee_order && $stored_fee_order_id ) {
+                $maybe_fee = wc_get_order( $stored_fee_order_id );
+                if ( $maybe_fee && $maybe_fee->is_paid() ) {
+                        $fee_order           = $maybe_fee;
+                        $fee_order_id        = $stored_fee_order_id;
+                        $clear_child_fee_meta = true;
+                }
+        }
 
-                        $fee_pairs = array_values( array_filter( array_map( 'trim', (array) $fee_order->get_meta( '_lp_mpr_old_new_pairs', true ) ) ) );
-                        if ( ! empty( $fee_pairs ) ) {
-                                $pairs_text = implode( '; ', $fee_pairs );
-                                $fee_reason = $fee_reason
-                                        ? sprintf( __( '%1$s — %2$s', 'lilleprinsen' ), $fee_reason, $pairs_text )
-                                        : $pairs_text;
-                        }
+        if ( $clear_child_fee_meta && $stored_fee_order_id ) {
+                $order->delete_meta_data( '_lp_mpr_child_fee_order_id' );
+                $order->save();
+        }
+
+        if ( $fee_order ) {
+                $fee_pairs = array_values( array_filter( array_map( 'trim', (array) $fee_order->get_meta( '_lp_mpr_old_new_pairs', true ) ) ) );
+                if ( ! empty( $fee_pairs ) ) {
+                        $pairs_text = implode( '; ', $fee_pairs );
+                        $fee_reason = $fee_reason
+                                ? sprintf( __( '%1$s — %2$s', 'lilleprinsen' ), $fee_reason, $pairs_text )
+                                : $pairs_text;
                 }
         }
 
