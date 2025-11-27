@@ -292,11 +292,11 @@ function lp_mpr_apply_discount_to_delta( float $delta, array $discount_ctx, bool
         // again would double-discount the difference customers pay.
         if ( $delta <= 0 || $percent <= 0 ) return $delta;
 
-        if ( $coupon_priced ) return $delta;
+        // Coupons excluded the replacement item, so don't try to carry the order discount over.
+        if ( ! $coupon_priced ) return $delta;
 
-        $factor = max( 0.0, ( 100.0 - min( 100.0, $percent ) ) / 100.0 );
-
-        return (float) wc_format_decimal( $delta * $factor, wc_get_price_decimals() );
+        // Coupons already affected the replacement price; avoid double-discounting.
+        return $delta;
 }
 
 /* ==========================================================
