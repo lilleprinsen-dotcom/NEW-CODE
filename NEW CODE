@@ -232,10 +232,9 @@ function lp_mpr_discount_factor_from_units( float $unit_gross_subtotal, float $u
 
 /** Kjør full recalculation tilsvarende WooCommerce "Recalculate" */
 function lp_mpr_recalculate_order( WC_Order $order ) : void {
-        if ( class_exists( 'WC_Admin_Order' ) && method_exists( 'WC_Admin_Order', 'calculate_totals' ) ) {
-                \WC_Admin_Order::calculate_totals( $order );
-        } else {
-                $order->calculate_totals( true );
+        $order->calculate_totals( true );
+        if ( function_exists( 'wc_delete_shop_order_transients' ) ) {
+                wc_delete_shop_order_transients( $order->get_id() );
         }
 }
 
