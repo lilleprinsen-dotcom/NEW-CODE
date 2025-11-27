@@ -154,6 +154,159 @@ function lp_mpr_thumb_html( ?WC_Product $product, string $class = 'lp-thumb', st
 }
 
 /* ==========================================================
+ *                 CHAT / PORTAL-DIALOG
+ * ========================================================== */
+
+function lp_mpr_chat_status_options() : array {
+        return array(
+                'open'     => __( 'Åpen', 'lilleprinsen' ),
+                'answered' => __( 'Besvart', 'lilleprinsen' ),
+                'closed'   => __( 'Lukket', 'lilleprinsen' ),
+        );
+}
+
+function lp_mpr_sanitize_chat_message( string $message ) : string {
+        return trim( wp_strip_all_tags( $message ) );
+}
+
+function lp_mpr_get_order_chats( WC_Order $order ) : array {
+        $raw = $order->get_meta( '_lp_mpr_chats', true );
+        return is_array( $raw ) ? $raw : array();
+}
+
+function lp_mpr_save_order_chats( WC_Order $order, array $chats ) : void {
+        $order->update_meta_data( '_lp_mpr_chats', $chats );
+        $order->save();
+}
+
+function lp_mpr_chat_suggestion_snapshot( WC_Order $order ) : string {
+        $data = (array) $order->get_meta( '_lp_missing_replacements', true );
+        $parts = array();
+        foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
+                $key = (string) $item_id;
+                if ( empty( $data[ $key ]['suggestions'] ) || ! is_array( $data[ $key ]['suggestions'] ) ) continue;
+
+                $sugs = array();
+                foreach ( (array) $data[ $key ]['suggestions'] as $sug ) {
+                        $pid = absint( $sug['product_id'] ?? 0 );
+                        $qty = max( 0, (int) ( $sug['qty'] ?? 0 ) );
+                        if ( ! $pid || $qty <= 0 ) continue;
+                        $p    = wc_get_product( $pid );
+                        $name = $p ? wp_strip_all_tags( $p->get_formatted_name() ) : '#' . $pid;
+                        $sugs[] = $name . ' × ' . $qty;
+                }
+
+                if ( ! empty( $sugs ) ) {
+                        $parts[] = wp_strip_all_tags( $item->get_name() ) . ': ' . implode( ', ', $sugs );
+                }
+        }
+
+        return $parts ? implode( '; ', $parts ) : __( 'Ingen forslag registrert', 'lilleprinsen' );
+}
+
+function lp_mpr_create_customer_chat( WC_Order $order, string $message, int $issue_ver = 0 ) : array {
+        $msg = lp_mpr_sanitize_chat_message( $message );
+        $chats = lp_mpr_get_order_chats( $order );
+        $chat = array(
+                'id'           => function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'lp-chat-', true ),
+                'status'       => 'open',
+                'issue_ver'    => $issue_ver,
+                'suggestions'  => lp_mpr_chat_suggestion_snapshot( $order ),
+                'created_at'   => time(),
+                'updated_at'   => time(),
+                'messages'     => array(
+                        array( 'from' => 'customer', 'at' => time(), 'body' => $msg ),
+                ),
+        );
+        $chats[] = $chat;
+        lp_mpr_save_order_chats( $order, $chats );
+        return $chat;
+}
+
+function lp_mpr_update_chat_on_order( WC_Order $order, string $chat_id, string $message = '', ?string $status = null ) : array {
+        $chats = lp_mpr_get_order_chats( $order );
+        $found = array();
+        foreach ( $chats as $idx => $chat ) {
+                if ( (string) ( $chat['id'] ?? '' ) !== (string) $chat_id ) continue;
+                $chat['updated_at'] = time();
+                if ( $message !== '' ) {
+                        $chat['messages'][] = array(
+                                'from' => 'admin',
+                                'at'   => time(),
+                                'body' => lp_mpr_sanitize_chat_message( $message ),
+                        );
+                        $chat['status'] = 'answered';
+                }
+                if ( $status && isset( lp_mpr_chat_status_options()[ $status ] ) ) {
+                        $chat['status'] = $status;
+                }
+                $chats[ $idx ] = $chat;
+                $found = $chat;
+                break;
+        }
+        if ( ! empty( $found ) ) {
+                lp_mpr_save_order_chats( $order, $chats );
+        }
+        return $found;
+}
+
+function lp_mpr_format_chat_transcript_html( array $chat ) : string {
+        $parts = array();
+        foreach ( (array) ( $chat['messages'] ?? array() ) as $msg ) {
+                $who  = (string) ( $msg['from'] ?? '' ) === 'admin' ? __( 'Kundeservice', 'lilleprinsen' ) : __( 'Kunde', 'lilleprinsen' );
+                $when = ! empty( $msg['at'] ) ? date_i18n( 'Y-m-d H:i', (int) $msg['at'] ) : '';
+                $body = isset( $msg['body'] ) ? nl2br( esc_html( $msg['body'] ) ) : '';
+                $parts[] = '<p><strong>' . esc_html( $who ) . '</strong> ' . ( $when ? '(' . esc_html( $when ) . ') ' : '' ) . '<br>' . $body . '</p>';
+        }
+        return implode( '', $parts );
+}
+
+function lp_mpr_format_chat_transcript_text( array $chat ) : string {
+        $parts = array();
+        foreach ( (array) ( $chat['messages'] ?? array() ) as $msg ) {
+                $who  = (string) ( $msg['from'] ?? '' ) === 'admin' ? __( 'Kundeservice', 'lilleprinsen' ) : __( 'Kunde', 'lilleprinsen' );
+                $when = ! empty( $msg['at'] ) ? date_i18n( 'Y-m-d H:i', (int) $msg['at'] ) : '';
+                $body = isset( $msg['body'] ) ? $msg['body'] : '';
+                $parts[] = trim( $who . ( $when ? ' (' . $when . ')' : '' ) . ': ' . $body );
+        }
+        return implode( "\n", $parts );
+}
+
+function lp_mpr_collect_all_chats() : array {
+        $orders = wc_get_orders( array(
+                'limit'      => -1,
+                'meta_query' => array(
+                        array(
+                                'key'     => '_lp_mpr_chats',
+                                'compare' => 'EXISTS',
+                        ),
+                ),
+                'status'     => array_keys( wc_get_order_statuses() ),
+                'return'     => 'objects',
+        ) );
+
+        $out = array();
+        foreach ( $orders as $order ) {
+                $chats = lp_mpr_get_order_chats( $order );
+                foreach ( $chats as $chat ) {
+                        $chat['order_id']     = $order->get_id();
+                        $chat['order_number'] = $order->get_order_number();
+                        $chat['order_email']  = $order->get_billing_email();
+                        $out[] = $chat;
+                }
+        }
+
+        usort( $out, function( $a, $b ){
+                $a_time = isset( $a['updated_at'] ) ? (int) $a['updated_at'] : 0;
+                $b_time = isset( $b['updated_at'] ) ? (int) $b['updated_at'] : 0;
+                return $b_time <=> $a_time;
+        } );
+
+        return $out;
+}
+
+
+/* ==========================================================
  *                 ADMIN META BOX & SØK
  * ========================================================== */
 
@@ -210,11 +363,60 @@ add_action( 'admin_menu', function () {
         );
 } );
 
+add_action( 'admin_post_lp_mpr_reply_chat', 'lp_mpr_reply_chat' );
+function lp_mpr_reply_chat() {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+                wp_die( esc_html__( 'Du har ikke tilgang til dette.', 'lilleprinsen' ) );
+        }
+
+        if ( empty( $_POST['lp_mpr_reply_chat_nonce'] ) || ! wp_verify_nonce( $_POST['lp_mpr_reply_chat_nonce'], 'lp_mpr_reply_chat' ) ) {
+                wp_die( esc_html__( 'Sikkerhetssjekk feilet.', 'lilleprinsen' ) );
+        }
+
+        $order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
+        $chat_id  = isset( $_POST['chat_id'] ) ? sanitize_text_field( wp_unslash( $_POST['chat_id'] ) ) : '';
+        $status   = isset( $_POST['chat_status'] ) ? sanitize_key( wp_unslash( $_POST['chat_status'] ) ) : '';
+        $message  = isset( $_POST['chat_reply'] ) ? lp_mpr_sanitize_chat_message( wp_unslash( $_POST['chat_reply'] ) ) : '';
+
+        $order = $order_id ? wc_get_order( $order_id ) : false;
+        if ( ! $order || ! $chat_id ) {
+                wp_safe_redirect( admin_url( 'admin.php?page=lp-mpr-settings#lp-mpr-chats' ) );
+                exit;
+        }
+
+        $chat = lp_mpr_update_chat_on_order( $order, $chat_id, $message, $status );
+        if ( empty( $chat ) ) {
+                wp_safe_redirect( admin_url( 'admin.php?page=lp-mpr-settings&lp_mpr_chat=missing#lp-mpr-chats' ) );
+                exit;
+        }
+
+        if ( '' !== $message ) {
+                $order->add_order_note( sprintf( __( 'MPR chat: Admin svarte: %s', 'lilleprinsen' ), $message ), false );
+                $email = $order->get_billing_email();
+                if ( $email ) {
+                        $subject = sprintf( __( 'Svar på chat om ordre #%s', 'lilleprinsen' ), $order->get_order_number() );
+                        $body  = '<p>' . sprintf( esc_html__( 'Hei! Her er oppdatert chat for ordre #%s.', 'lilleprinsen' ), esc_html( $order->get_order_number() ) ) . '</p>';
+                        $body .= '<p><strong>' . esc_html__( 'Forslag sendt', 'lilleprinsen' ) . ':</strong> ' . esc_html( $chat['suggestions'] ?? '' ) . '</p>';
+                        $body .= '<h3>' . esc_html__( 'Samtale', 'lilleprinsen' ) . '</h3>' . lp_mpr_format_chat_transcript_html( $chat );
+                        wc_mail( $email, $subject, $body, array( 'Content-Type: text/html; charset=UTF-8' ) );
+                }
+        } elseif ( $status ) {
+                $statuses = lp_mpr_chat_status_options();
+                $status_label = isset( $statuses[ $status ] ) ? $statuses[ $status ] : $status;
+                $order->add_order_note( sprintf( __( 'MPR chat-status satt til %s', 'lilleprinsen' ), $status_label ), false );
+        }
+
+        wp_safe_redirect( admin_url( 'admin.php?page=lp-mpr-settings&lp_mpr_chat=updated#lp-mpr-chats' ) );
+        exit;
+}
+
 function lp_mpr_render_settings_page() {
         if ( ! current_user_can( 'manage_woocommerce' ) ) return;
 
         $ttl_minutes = max( 1, floor( lp_mpr_reservation_ttl_seconds() / 60 ) );
         $debounce    = lp_mpr_debounce_seconds();
+        $chats       = lp_mpr_collect_all_chats();
+        $statuses    = lp_mpr_chat_status_options();
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__( 'Erstatninger for manglende varer', 'lilleprinsen' ) . '</h1>';
@@ -234,6 +436,63 @@ function lp_mpr_render_settings_page() {
         echo '<a class="button button-primary" href="' . esc_url( admin_url( 'edit.php?post_type=shop_order' ) ) . '">' . esc_html__( 'Gå til ordreoversikt', 'lilleprinsen' ) . '</a> ';
         echo '<a class="button" href="' . esc_url( admin_url( 'admin.php?page=wc-settings' ) ) . '">' . esc_html__( 'Åpne WooCommerce-innstillinger', 'lilleprinsen' ) . '</a>';
         echo '</p>';
+
+        echo '<h2 id="lp-mpr-chats">' . esc_html__( 'Kundesamtaler', 'lilleprinsen' ) . '</h2>';
+        echo '<p>' . esc_html__( 'Kunder kan sende en chat fra portalen hvis forslagene ikke passer. Svarene du skriver her sendes til kundens e-post sammen med hele historikken.', 'lilleprinsen' ) . '</p>';
+        echo '<style>.lp-chat-card{box-sizing:border-box;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:12px 0;box-shadow:0 1px 2px rgba(15,23,42,.08);} .lp-chat-head{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-weight:600;} .lp-chat-meta{font-size:12px;color:#475569;margin:6px 0;} .lp-chat-thread{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin:8px 0;} .lp-chat-bubble{padding:8px 10px;border-radius:8px;margin:6px 0;background:#fff;border:1px solid #e2e8f0;} .lp-chat-bubble.admin{background:#eef2ff;border-color:#cbd5e1;} .lp-chat-bubble .who{font-weight:600;display:block;} .lp-chat-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0;} .lp-chat-actions select{min-width:140px;} .lp-chat-actions textarea{width:100%;max-width:480px;} .lp-chat-footnote{font-size:12px;color:#64748b;margin:4px 0 0;}</style>';
+
+        if ( empty( $chats ) ) {
+                echo '<p>' . esc_html__( 'Ingen chats er registrert ennå.', 'lilleprinsen' ) . '</p>';
+        } else {
+                foreach ( $chats as $chat ) {
+                        $order_link = isset( $chat['order_id'] ) ? admin_url( 'post.php?post=' . (int) $chat['order_id'] . '&action=edit' ) : '';
+                        $last_time  = ! empty( $chat['updated_at'] ) ? date_i18n( 'Y-m-d H:i', (int) $chat['updated_at'] ) : '';
+                        echo '<div class="lp-chat-card">';
+                        echo '<div class="lp-chat-head">';
+                        echo '<div>' . esc_html__( 'Ordre', 'lilleprinsen' ) . ' #' . esc_html( $chat['order_number'] ?? '' ) . ( $order_link ? ' – <a href="' . esc_url( $order_link ) . '">' . esc_html__( 'Åpne ordre', 'lilleprinsen' ) . '</a>' : '' ) . '</div>';
+                        echo $last_time ? '<div class="tag">' . esc_html__( 'Sist oppdatert', 'lilleprinsen' ) . ': ' . esc_html( $last_time ) . '</div>' : '';
+                        echo '</div>';
+
+                        echo '<div class="lp-chat-meta"><strong>' . esc_html__( 'Forslag sendt', 'lilleprinsen' ) . ':</strong> ' . esc_html( $chat['suggestions'] ?? '' ) . '</div>';
+
+                        echo '<div class="lp-chat-thread">';
+                        if ( empty( $chat['messages'] ) ) {
+                                echo '<p class="description">' . esc_html__( 'Ingen meldinger i denne chatten ennå.', 'lilleprinsen' ) . '</p>';
+                        } else {
+                                foreach ( (array) $chat['messages'] as $msg ) {
+                                        $who  = (string) ( $msg['from'] ?? '' ) === 'admin' ? __( 'Kundeservice', 'lilleprinsen' ) : __( 'Kunde', 'lilleprinsen' );
+                                        $when = ! empty( $msg['at'] ) ? date_i18n( 'Y-m-d H:i', (int) $msg['at'] ) : '';
+                                        $body = isset( $msg['body'] ) ? nl2br( esc_html( $msg['body'] ) ) : '';
+                                        $class = (string) ( $msg['from'] ?? '' ) === 'admin' ? 'lp-chat-bubble admin' : 'lp-chat-bubble';
+                                        echo '<div class="' . esc_attr( $class ) . '"><span class="who">' . esc_html( $who ) . ( $when ? ' (' . esc_html( $when ) . ')' : '' ) . '</span>' . $body . '</div>';
+                                }
+                        }
+                        echo '</div>';
+
+                        echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+                        echo '<div class="lp-chat-actions">';
+                        echo '<label>' . esc_html__( 'Status', 'lilleprinsen' ) . ' '; 
+                        echo '<select name="chat_status">';
+                        $current_status = $chat['status'] ?? 'open';
+                        foreach ( $statuses as $key => $label ) {
+                                echo '<option value="' . esc_attr( $key ) . '" ' . selected( $current_status, $key, false ) . '>' . esc_html( $label ) . '</option>';
+                        }
+                        echo '</select></label>';
+                        echo '</div>';
+
+                        echo '<p><label for="chat-reply-' . esc_attr( $chat['id'] ?? 'chat' ) . '">' . esc_html__( 'Send svar til kunden (valgfritt)', 'lilleprinsen' ) . '</label><br>';
+                        echo '<textarea rows="3" name="chat_reply" id="chat-reply-' . esc_attr( $chat['id'] ?? 'chat' ) . '" placeholder="' . esc_attr__( 'Skriv svaret ditt her …', 'lilleprinsen' ) . '"></textarea></p>';
+                        echo '<p><button type="submit" class="button button-primary">' . esc_html__( 'Oppdater chat & send svar', 'lilleprinsen' ) . '</button></p>';
+                        echo '<p class="lp-chat-footnote">' . esc_html__( 'Svaret sendes til kundens e-post med hele chatten.', 'lilleprinsen' ) . '</p>';
+                        wp_nonce_field( 'lp_mpr_reply_chat', 'lp_mpr_reply_chat_nonce' );
+                        echo '<input type="hidden" name="action" value="lp_mpr_reply_chat">';
+                        echo '<input type="hidden" name="order_id" value="' . esc_attr( $chat['order_id'] ?? 0 ) . '">';
+                        echo '<input type="hidden" name="chat_id" value="' . esc_attr( $chat['id'] ?? '' ) . '">';
+                        echo '</form>';
+
+                        echo '</div>';
+                }
+        }
 
         echo '</div>';
 }
@@ -802,18 +1061,40 @@ function lp_mpr_portal_action() {
 	if ( get_transient( $thk ) ) wp_send_json_error( array( 'message' => __( 'Vent et lite øyeblikk før du prøver igjen.', 'lilleprinsen' ) ) );
 	set_transient( $thk, 1, 5 );
 
-	$allowed = array( 'approve_update', 'delete_missing' );
-	if ( ! in_array( $which, $allowed, true ) ) wp_send_json_error( array( 'message' => __( 'Ukjent handling.', 'lilleprinsen' ) ) );
+        $allowed = array( 'approve_update', 'delete_missing', 'send_chat' );
+        if ( ! in_array( $which, $allowed, true ) ) wp_send_json_error( array( 'message' => __( 'Ukjent handling.', 'lilleprinsen' ) ) );
 
-	// Versjonssjekk
-	$issue = (array) $order->get_meta( '_lp_mpr_issue', true );
-	$cur_ver = isset( $issue['ver'] ) ? (int) $issue['ver'] : 0;
-	if ( $issue_ver >= 0 && $issue_ver !== $cur_ver ) wp_send_json_error( array( 'message' => __( 'Denne lenken er utløpt. Bruk den siste vi sendte.', 'lilleprinsen' ) ) );
+        // Versjonssjekk
+        $issue = (array) $order->get_meta( '_lp_mpr_issue', true );
+        $cur_ver = isset( $issue['ver'] ) ? (int) $issue['ver'] : 0;
+        $strict_issue_check = $which !== 'send_chat';
+        if ( $strict_issue_check && $issue_ver >= 0 && $issue_ver !== $cur_ver ) wp_send_json_error( array( 'message' => __( 'Denne lenken er utløpt. Bruk den siste vi sendte.', 'lilleprinsen' ) ) );
 
-	// Blokker hvis allerede konsumert (flag settes ved suksess)
-	if ( ! empty( $issue['consumed'] ) ) wp_send_json_error( array( 'message' => __( 'Denne forespørselen er allerede besvart.', 'lilleprinsen' ) ) );
+        // Blokker hvis allerede konsumert (flag settes ved suksess)
+        if ( $strict_issue_check && ! empty( $issue['consumed'] ) ) wp_send_json_error( array( 'message' => __( 'Denne forespørselen er allerede besvart.', 'lilleprinsen' ) ) );
 
-	$data = (array) $order->get_meta( '_lp_missing_replacements', true );
+        if ( $which === 'send_chat' ) {
+                $raw_msg = isset( $_POST['message'] ) ? wp_unslash( $_POST['message'] ) : '';
+                $msg     = lp_mpr_sanitize_chat_message( $raw_msg );
+                if ( '' === $msg ) wp_send_json_error( array( 'message' => __( 'Skriv en melding først.', 'lilleprinsen' ) ) );
+
+                $chat = lp_mpr_create_customer_chat( $order, $msg, $cur_ver );
+                $order->add_order_note( sprintf( __( 'MPR portal: Kunde åpnet chat: %s', 'lilleprinsen' ), $msg ), false );
+
+                $admin_email = apply_filters( 'lp_mpr_chat_notification_email', 'kundeservice@lilleprinsen.no', $order );
+                if ( $admin_email ) {
+                        $subject = sprintf( __( 'Ny chat fra kunde på ordre #%s', 'lilleprinsen' ), $order->get_order_number() );
+                        $body  = '<p>' . sprintf( esc_html__( 'En kunde har sendt en chat fra portalen for ordre #%s.', 'lilleprinsen' ), esc_html( $order->get_order_number() ) ) . '</p>';
+                        $body .= '<p><strong>' . esc_html__( 'Melding', 'lilleprinsen' ) . ':</strong><br>' . nl2br( esc_html( $msg ) ) . '</p>';
+                        $body .= '<p><strong>' . esc_html__( 'Forslag sendt', 'lilleprinsen' ) . ':</strong> ' . esc_html( $chat['suggestions'] ?? '' ) . '</p>';
+                        $body .= '<p><a href="' . esc_url( admin_url( 'admin.php?page=lp-mpr-settings#lp-mpr-chats' ) ) . '">' . esc_html__( 'Åpne chats i innstillingene', 'lilleprinsen' ) . '</a></p>';
+                        wc_mail( $admin_email, $subject, $body, array( 'Content-Type: text/html; charset=UTF-8' ) );
+                }
+
+                wp_send_json_success( array( 'message' => __( 'Meldingen er sendt. Vi svarer på e-post.', 'lilleprinsen' ) ) );
+        }
+
+        $data = (array) $order->get_meta( '_lp_missing_replacements', true );
 	/* ===== approve_update ===== */
 	if ( $which === 'approve_update' ) {
 		$sel_raw = isset( $_POST['selections'] ) ? wp_unslash( $_POST['selections'] ) : array();
@@ -1615,6 +1896,8 @@ button.secondary{background:#fff;color:var(--ink);border:1px solid var(--br);box
 .footer-note{color:var(--muted);font-size:13px;margin-top:12px;text-align:center}
 hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .small{font-size:12px;color:var(--muted)}
+.chat-card textarea{width:100%;border:1px solid var(--br);border-radius:10px;padding:10px;font-family:inherit;font-size:14px;min-height:90px;margin:6px 0}
+.muted-note{color:var(--muted);font-size:12px;margin:4px 0 0}
 .refund-note{margin-top:4px;line-height:1.4}
 .li{list-style:none;padding:0;margin:0}
 .qty{font-variant-numeric:tabular-nums;color:var(--muted)}
@@ -1724,8 +2007,18 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 		}
 		?>
 
-		<p class="footer-note"><?php echo esc_html__( 'Vi gjør endringen i bakgrunnen og oppdaterer ordren din straks.', 'lilleprinsen' ); ?></p>
-	</div>
+                <div class="card chat-card">
+                        <h3><?php echo esc_html__( 'Passer ikke forslagene?', 'lilleprinsen' ); ?></h3>
+                        <p class="small"><?php echo esc_html__( 'Send oss en melding, så ser kundeservice på ordren din.', 'lilleprinsen' ); ?></p>
+                        <textarea id="lp-chat-message" placeholder="<?php echo esc_attr__( 'Fortell oss hva du ønsker …', 'lilleprinsen' ); ?>"></textarea>
+                        <div class="actions">
+                                <button type="button" class="secondary" data-action="send_chat"><?php echo esc_html__( 'Send melding til kundeservice', 'lilleprinsen' ); ?></button>
+                        </div>
+                        <p class="muted-note"><?php echo esc_html__( 'Vi svarer på e-post og legger ved hele chatten.', 'lilleprinsen' ); ?></p>
+                </div>
+
+                <p class="footer-note"><?php echo esc_html__( 'Vi gjør endringen i bakgrunnen og oppdaterer ordren din straks.', 'lilleprinsen' ); ?></p>
+        </div>
 
 	<script>
 	(function(){
@@ -1747,30 +2040,44 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 			card.querySelectorAll('.lp-choice:checked').forEach(function(c){ chosen += parseInt(c.getAttribute('data-qty')||'0',10)||0; });
 			return allowed>0 && chosen>allowed;
 		}
-		function post(which, extra){
-			var now=Date.now(); if(now-lastClick<cooldown) return; lastClick=now;
-			var fd=new FormData(); fd.append('action','lp_mpr_portal_action'); fd.append('which',which); fd.append('order_id',orderId); fd.append('order_key',orderKey); fd.append('nonce',nonce); fd.append('issue_ver',issueVer);
-			if(extra&&extra.selections){ fd.append('selections', JSON.stringify(extra.selections)); }
-			fetch(ajax,{method:'POST',body:fd,credentials:'same-origin'}).then(function(r){return r.json().catch(function(){return {success:false,data:{message:'Ugyldig svar'}};});}).then(function(resp){
-				if(resp && resp.success){ alert('Takk! Vi tar det herfra.'); location.reload(); }
-				else { alert((resp&&resp.data&&resp.data.message)||'Noe gikk galt.'); }
-			}).catch(function(){ alert('Nettverksfeil.'); });
-		}
+                function post(which, extra){
+                        var now=Date.now(); if(now-lastClick<cooldown) return; lastClick=now;
+                        var fd=new FormData(); fd.append('action','lp_mpr_portal_action'); fd.append('which',which); fd.append('order_id',orderId); fd.append('order_key',orderKey); fd.append('nonce',nonce); fd.append('issue_ver',issueVer);
+                        if(extra&&extra.selections){ fd.append('selections', JSON.stringify(extra.selections)); }
+                        if(extra&&extra.message){ fd.append('message', extra.message); }
+                        fetch(ajax,{method:'POST',body:fd,credentials:'same-origin'}).then(function(r){return r.json().catch(function(){return {success:false,data:{message:'Ugyldig svar'}};});}).then(function(resp){
+                                if(resp && resp.success){
+                                        var okMsg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Takk! Vi tar det herfra.';
+                                        alert(okMsg);
+                                        if(which==='send_chat'){
+                                                var field=document.getElementById('lp-chat-message'); if(field) field.value='';
+                                        }else{
+                                                location.reload();
+                                        }
+                                }
+                                else { alert((resp&&resp.data&&resp.data.message)||'Noe gikk galt.'); }
+                        }).catch(function(){ alert('Nettverksfeil.'); });
+                }
 
 		host.addEventListener('click', function(e){
 			var t=e.target.closest('button[data-action]'); if(!t) return;
 			var act=t.getAttribute('data-action');
-			if(act==='approve_update'){
-				var bad=false; host.querySelectorAll('.lp-portal-item').forEach(function(card){ if(overChosen(card)) bad=true; });
-				if(bad){ alert('<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>'); return; }
-				var sel=selections(); if(Object.keys(sel).length===0){ alert('<?php echo esc_js( __( 'Huk av et alternativ først 🙂', 'lilleprinsen' ) ); ?>'); return; }
-				post('approve_update',{selections:sel});
-			}else if(act==='delete_missing'){
-				if(confirm('<?php echo esc_js( __( 'Er du sikker på at vi skal slette den manglende varen?', 'lilleprinsen' ) ); ?>')) post('delete_missing');
-			}
-		});
-	})();
-	</script>
+                        if(act==='approve_update'){
+                                var bad=false; host.querySelectorAll('.lp-portal-item').forEach(function(card){ if(overChosen(card)) bad=true; });
+                                if(bad){ alert('<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>'); return; }
+                                var sel=selections(); if(Object.keys(sel).length===0){ alert('<?php echo esc_js( __( 'Huk av et alternativ først 🙂', 'lilleprinsen' ) ); ?>'); return; }
+                                post('approve_update',{selections:sel});
+                        }else if(act==='delete_missing'){
+                                if(confirm('<?php echo esc_js( __( 'Er du sikker på at vi skal slette den manglende varen?', 'lilleprinsen' ) ); ?>')) post('delete_missing');
+                        }else if(act==='send_chat'){
+                                var field=document.getElementById('lp-chat-message');
+                                var msg=field ? (field.value||'').trim() : '';
+                                if(!msg){ alert('<?php echo esc_js( __( 'Skriv en melding først.', 'lilleprinsen' ) ); ?>'); return; }
+                                post('send_chat',{message:msg});
+                        }
+                });
+        })();
+        </script>
 	</body>
 	</html>
 	<?php
