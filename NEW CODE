@@ -1787,7 +1787,8 @@ function lp_mpr_portal_action() {
                 $order_total_html = $pricing['order_total_html'] ?? wp_kses_post( wc_price( $order->get_total(), array( 'currency' => $order->get_currency() ) ) );
                 $summary_key = '';
                 $delta_sum   = isset( $pricing['delta_gross_sum'] ) ? (float) $pricing['delta_gross_sum'] : 0.0;
-                if ( $delta_sum <= 0 && empty( $result['pending_fee'] ) ) {
+                $net_delta   = isset( $pricing['order_total_delta'] ) ? (float) $pricing['order_total_delta'] : 0.0;
+                if ( $net_delta <= 0 && empty( $result['pending_fee'] ) ) {
                         $summary_key = lp_mpr_store_customer_summary( $order, $result );
                 }
 
@@ -2106,6 +2107,7 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
         if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
 
         $delta_gross_sum = 0.0; $delta_by_line = array();
+        $estimated_order_delta = 0.0;
         $pricing = array(
                 'delta_gross_sum'       => 0.0,
                 'order_total_before'    => (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() ),
@@ -2119,31 +2121,43 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
 		$approved_total = 0; foreach ( $reps as $rep ) { $approved_total += max(0,(int)$rep['qty']); }
 		if ( $cap_enabled && $allowed > 0 ) $approved_total = min( $approved_total, $allowed );
 
-		$orig_unit_gross = (float) $it['unit_gross_total'];
-		$left = $approved_total; $d_line = 0.0;
+                $orig_unit_gross = (float) $it['unit_gross_total'];
+                $left = $approved_total; $d_line = 0.0;
 
-		foreach ( $reps as $rep ) {
-			if ( $left <= 0 ) break;
-			$qty = min( $left, max( 0, (int) $rep['qty'] ) );
-			if ( $qty <= 0 ) continue;
-			if ( (string) ( $rep['mode'] ?? 'customer_pays' ) !== 'customer_pays' ) { $left -= $qty; continue; } // butikk dekker → ikke med i avgift
+                foreach ( $reps as $rep ) {
+                        if ( $left <= 0 ) break;
+                        $qty = min( $left, max( 0, (int) $rep['qty'] ) );
+                        if ( $qty <= 0 ) continue;
+                        $mode = (string) ( $rep['mode'] ?? 'customer_pays' );
 
                         $p = wc_get_product( absint( $rep['product_id'] ) );
                         if ( ! $p ) { $left -= $qty; continue; }
                         $coupon_factor = lp_mpr_get_coupon_factor_for_product( $p, $order );
                         $repl_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order ) * (float) $coupon_factor['factor'];
+
+                        $raw_delta = ( $repl_unit_gross - $orig_unit_gross ) * $qty;
+                        $net_delta = lp_mpr_apply_discount_to_delta( $raw_delta, $discount_ctx, (bool) $coupon_factor['applies'] );
+                        $estimated_order_delta += $net_delta;
+
+                        if ( $mode !== 'customer_pays' ) { $left -= $qty; continue; } // butikk dekker → ikke med i avgift
+
                         $diff_raw = max( 0, $repl_unit_gross - $orig_unit_gross ) * $qty; // Kunde betaler kun POSITIVT mellomlegg
                         $diff = lp_mpr_apply_discount_to_delta( $diff_raw, $discount_ctx, (bool) $coupon_factor['applies'] );
-			$d_line += $diff;
-			$left -= $qty;
-		}
-		if ( $d_line > 0 ) { $delta_by_line[ absint( $it['order_item_id'] ) ] = $d_line; $delta_gross_sum += $d_line; }
+                        $d_line += $diff;
+                        $left -= $qty;
+                }
+                if ( $d_line > 0 ) { $delta_by_line[ absint( $it['order_item_id'] ) ] = $d_line; $delta_gross_sum += $d_line; }
         }
         $delta_gross_sum = (float) wc_format_decimal( $delta_gross_sum, wc_get_price_decimals() );
         $pricing['delta_gross_sum'] = $delta_gross_sum;
+        $pricing['estimated_order_delta'] = (float) wc_format_decimal( $estimated_order_delta, wc_get_price_decimals() );
 
-        // Tilleggsordre hvis nødvendig
-        if ( $delta_gross_sum > 0 ) {
+        // Tilleggsordre kun når totalsummen øker etter alle bytter
+        // A: Samme totalsum → ingen betaling
+        // B: Totalsum høyere → betal tillegget
+        // C: Totalsum lavere → bare bytt, ingen mellomlegg
+        // D: Blandet (+1000/-500) → nettopositivt? betal; ellers bytt uten betaling
+        if ( $delta_gross_sum > 0 && $pricing['estimated_order_delta'] > 0 ) {
                 $child = lp_mpr_create_extra_fee_order( $order, $payload, $delta_gross_sum, $delta_by_line );
                 $order->update_meta_data( '_lp_mpr_child_fee_order_id', $child->get_id() ); $order->save();
                 lp_mpr_email_extra_fee_invoice( $order, $child, $delta_gross_sum );
