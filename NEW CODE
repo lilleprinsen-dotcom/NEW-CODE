@@ -859,7 +859,82 @@ function lp_mpr_render_settings_page() {
 
         echo '<h2 id="lp-mpr-chats">' . esc_html__( 'Kundesamtaler', 'lilleprinsen' ) . '</h2>';
         echo '<p>' . esc_html__( 'Kunder kan sende en chat fra portalen hvis forslagene ikke passer. Svarene du skriver her sendes til kundens e-post sammen med hele historikken.', 'lilleprinsen' ) . '</p>';
-        echo '<style>.lp-chat-card{box-sizing:border-box;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin:12px 0;box-shadow:0 1px 2px rgba(15,23,42,.08);} .lp-chat-head{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-weight:600;} .lp-chat-meta{font-size:12px;color:#475569;margin:6px 0;} .lp-chat-thread{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin:8px 0;} .lp-chat-bubble{padding:8px 10px;border-radius:8px;margin:6px 0;background:#fff;border:1px solid #e2e8f0;} .lp-chat-bubble.admin{background:#eef2ff;border-color:#cbd5e1;} .lp-chat-bubble .who{font-weight:600;display:block;} .lp-chat-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0;} .lp-chat-actions select{min-width:140px;} .lp-chat-actions textarea{width:100%;max-width:480px;} .lp-chat-footnote{font-size:12px;color:#64748b;margin:4px 0 0;}</style>';
+        echo '<style>
+:root{--ink:#0f172a;--soft:#64748b;--bg:#f8fafc;--card:#ffffff;--line:#e2e8f0;--accent:#2563eb;--accent-soft:#dbeafe;}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6}
+.container{max-width:820px;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.hero{display:flex;align-items:center;gap:14px;padding:18px;border-radius:16px;background:var(--card);border:1px solid var(--line)}
+.hero .emoji{font-size:34px;line-height:1}
+.hero .title{margin:0;font-size:22px;font-weight:800}
+.hero .subtitle{margin:4px 0 0;font-size:15px;color:var(--soft)}
+.pills{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.pill{display:flex;gap:8px;align-items:center;padding:12px;border-radius:14px;background:var(--accent-soft);color:var(--ink);border:1px solid var(--line);font-weight:700}
+.pill .emoji{font-size:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.old{gap:12px}
+.lp-thumb{width:64px;height:64px;border-radius:12px;object-fit:cover;background:#e2e8f0}
+.tag{font-size:12px;color:var(--soft)}
+.qty{font-size:13px;color:var(--soft)}
+.price-line{margin-top:2px;font-size:13px;color:var(--soft)}
+.choice{display:flex;gap:10px;align-items:flex-start;padding:10px;border-radius:14px;border:1px dashed var(--line);background:#f8fafc;margin:10px 0}
+.choice img{flex:0 0 auto}
+.choice strong{display:block;margin-bottom:2px}
+.choice a,.product-link{color:inherit;text-decoration:none}
+.choice a:hover,.product-link:hover{text-decoration:underline;color:var(--accent)}
+.screen-reader-text{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--card);border:1px solid var(--line);font-weight:700;font-size:12px}
+.chip{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;border:1px solid var(--line);font-size:11px;margin-left:6px}
+.li{list-style:none;padding:0;margin:0}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+button{appearance:none;border:0;border-radius:12px;padding:12px 14px;font-weight:800;cursor:pointer}
+button.primary{background:var(--accent);color:#fff}
+button.secondary{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+button.choice-picked{box-shadow:0 0 0 2px var(--accent)}
+button.secondary.choice-picked{background:var(--accent-soft);color:var(--ink)}
+.decision-status{border:1px dashed var(--line);padding:10px;border-radius:12px;font-size:13px;color:var(--soft);background:#f8fafc;margin-top:6px}
+.decision-status.accept{border-color:#bbf7d0;background:#ecfdf3;color:#166534}
+.decision-status.decline{border-color:#fecdd3;background:#fff1f2;color:#b91c1c}
+.footer-note{color:var(--soft);font-size:13px;text-align:center}
+.small{font-size:13px;color:var(--soft)}
+.chat-card textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:inherit;font-size:14px;min-height:90px}
+.muted-note{color:var(--soft);font-size:12px;margin-top:6px}
+.note-line{color:var(--soft);font-size:13px;margin:4px 0 0}
+.pay-note{color:var(--soft);font-size:12px;margin:4px 0 0}
+.refund-note{margin-top:4px;line-height:1.4}
+.status{display:none;padding:12px;border-radius:14px;border:1px solid var(--line);background:#f8fafc;font-size:13px;line-height:1.5}
+.status.show{display:block}
+.status.success{border-color:#bbf7d0;background:#ecfdf3;color:#166534}
+.status.error{border-color:#fecdd3;background:#fff1f2;color:#b91c1c}
+.loading-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.35);display:none;align-items:center;justify-content:center;z-index:60}
+.loading-backdrop.visible{display:flex}
+.loading-box{background:var(--card);padding:18px;border-radius:14px;box-shadow:0 20px 50px rgba(15,23,42,.2);text-align:center;min-width:240px;border:1px solid var(--line)}
+.loading-text{font-weight:700}
+.spinner{width:28px;height:28px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);margin:0 auto 10px;animation:spin 1s linear infinite}
+.summary-header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 10px}
+.summary-label{font-size:13px;color:var(--soft)}
+.summary-price{font-size:12px}
+.summary-title{margin:8px 0 4px;font-weight:800}
+.summary-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.summary-line{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:10px;border:1px solid var(--line);border-radius:10px}
+.summary-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;z-index:60;padding:16px}
+.summary-backdrop.visible{display:flex}
+.summary-modal{background:#fff;max-width:520px;width:100%;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.2);padding:18px;max-height:85vh;overflow:auto}
+.summary-modal h3{margin:0 0 6px;font-size:18px}
+.summary-section{margin:12px 0 0}
+.summary-empty{color:var(--soft);font-size:13px;margin:4px 0 0}
+.summary-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.summary-meta{display:block;font-size:12px;color:var(--soft);margin-top:2px}
+.summary-total{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#f8fafc;margin:8px 0 12px}
+.summary-total .badge{margin-left:auto}
+.summary-total.negative .badge{background:#ecfdf3;color:#166534;border-color:#bbf7d0}
+.summary-total.positive .badge{background:#fff1f2;color:#b91c1c;border-color:#fecdd3}
+.lp-step-label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;color:var(--soft);font-size:12px}
+.lp-step-card{position:relative;margin-bottom:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (max-width:540px){.hero{flex-direction:column;align-items:flex-start}.actions button{width:100%}}
+</style>';
 
         if ( empty( $chats ) ) {
                 echo '<p>' . esc_html__( 'Ingen chats er registrert ennå.', 'lilleprinsen' ) . '</p>';
@@ -1681,7 +1756,7 @@ function lp_mpr_portal_action() {
           if ( count( $respondable ) > 1 ) {
                   foreach ( $respondable as $rid ) {
                           if ( empty( $selections[ (string) $rid ] ) && ! in_array( $rid, $declines, true ) ) {
-                                  wp_send_json_error( array( 'message' => __( 'Velg erstatning eller sletting for alle varene som mangler.', 'lilleprinsen' ) ) );
+                                  wp_send_json_error( array( 'message' => __( 'Si hva vi skal gjøre for alle varene som mangler.', 'lilleprinsen' ) ) );
                           }
                   }
           }
@@ -1693,7 +1768,7 @@ function lp_mpr_portal_action() {
                         $sugs        = ! empty( $data[ $key ]['suggestions'] ) ? array_values( $data[ $key ]['suggestions'] ) : array();
 			$chosen_total = 0;
 			if ( is_array( $indexes ) ) foreach ( $indexes as $i ) if ( isset( $sugs[ $i ] ) ) $chosen_total += max( 0, (int) ( $sugs[ $i ]['qty'] ?? 0 ) );
-			if ( $missing_qty > 0 && $chosen_total > $missing_qty ) { $order->add_order_note( 'MPR portal: over-valg blokkert.', false ); wp_send_json_error( array( 'message' => __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ) ); }
+                   if ( $missing_qty > 0 && $chosen_total > $missing_qty ) { $order->add_order_note( 'MPR portal: over-valg blokkert.', false ); wp_send_json_error( array( 'message' => __( 'Du har valgt for mange varer.', 'lilleprinsen' ) ) ); }
 		}
 
 		// Lager-sjekk + reservasjon
@@ -2763,83 +2838,80 @@ $summary_data  = $summary_key ? lp_mpr_consume_customer_summary( $summary_key, $
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?php echo esc_html__( 'Erstatninger for manglende varer', 'lilleprinsen' ); ?></title>
 <style>
-:root{--ink:#0f172a;--muted:#475569;--bg:#f8fafc;--card:#ffffff;--br:#e2e8f0;--accent:#0f172a;--pill:#f1f5f9;}
+:root{--ink:#0f172a;--soft:#64748b;--bg:#f8fafc;--card:#ffffff;--line:#e2e8f0;--accent:#2563eb;--accent-soft:#dbeafe;}
 *{box-sizing:border-box}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);}
-.container{max-width:720px;margin:0 auto;padding:18px;}
-.hero{display:flex;gap:12px;align-items:center;background:#ffffff;color:var(--ink);border-radius:14px;padding:14px 16px;box-shadow:0 8px 20px rgba(15,23,42,.06);border:1px solid var(--br);margin-bottom:12px}
-.hero .emoji{font-size:26px}
-.hero .title{margin:0;font-size:18px;font-weight:700}
-.hero .subtitle{margin:6px 0 0;font-size:13px;color:var(--muted)}
-.pills{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px 0}
-.pill{display:inline-flex;align-items:center;gap:8px;padding:10px 12px;background:var(--pill);border:1px solid var(--br);color:#0f172a;border-radius:12px;font-size:13px;font-weight:600}
-.pill .emoji{font-size:14px}
-.card{background:var(--card);border:1px solid var(--br);border-radius:12px;padding:14px;margin:12px 0;box-shadow:0 1px 4px rgba(15,23,42,.06)}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.tag{font-size:12px;color:var(--muted)}
-.badge{font-size:12px;background:#eef2ff;color:#3730a3;padding:4px 10px;border-radius:10px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
-.chip{font-size:11px;background:#ecfeff;color:#0e7490;border:1px solid #a5f3fc;padding:2px 8px;border-radius:999px;margin-left:6px;white-space:nowrap}
-.choice{display:flex;gap:10px;align-items:center;padding:10px;border:1px solid var(--br);border-radius:10px;margin:8px 0;background:#f8fafc}
+body{margin:0;font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6}
+.container{max-width:820px;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.hero{display:flex;align-items:center;gap:14px;padding:18px;border-radius:16px;background:var(--card);border:1px solid var(--line)}
+.hero .emoji{font-size:34px;line-height:1}
+.hero .title{margin:0;font-size:22px;font-weight:800}
+.hero .subtitle{margin:4px 0 0;font-size:15px;color:var(--soft)}
+.pills{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.pill{display:flex;gap:8px;align-items:center;padding:12px;border-radius:14px;background:var(--accent-soft);color:var(--ink);border:1px solid var(--line);font-weight:700}
+.pill .emoji{font-size:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.old{gap:12px}
+.lp-thumb{width:64px;height:64px;border-radius:12px;object-fit:cover;background:#e2e8f0}
+.tag{font-size:12px;color:var(--soft)}
+.qty{font-size:13px;color:var(--soft)}
+.price-line{margin-top:2px;font-size:13px;color:var(--soft)}
+.choice{display:flex;gap:10px;align-items:flex-start;padding:10px;border-radius:14px;border:1px dashed var(--line);background:#f8fafc;margin:10px 0}
 .choice img{flex:0 0 auto}
-.choice a,.product-link{color:var(--ink);text-decoration:none;display:inline-flex;align-items:center;gap:6px}
-.choice a:focus,.choice a:hover,.product-link:focus,.product-link:hover{color:var(--accent);text-decoration:underline}
+.choice strong{display:block;margin-bottom:2px}
+.choice a,.product-link{color:inherit;text-decoration:none}
+.choice a:hover,.product-link:hover{text-decoration:underline;color:var(--accent)}
 .screen-reader-text{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
-.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
-button{appearance:none;background:var(--accent);border:0;color:#fff;border-radius:10px;padding:12px 14px;font-weight:700;box-shadow:0 1px 3px rgba(15,23,42,.22)}
-button.secondary{background:#fff;color:var(--ink);border:1px solid var(--br);box-shadow:none}
-button.choice-picked{box-shadow:0 0 0 2px #1d4ed8,0 1px 3px rgba(15,23,42,.22);outline:none;transform:translateY(-1px)}
-button.secondary.choice-picked{background:#eef2ff;color:#1d4ed8;border-color:#1d4ed8}
-.decision-status{border:1px dashed var(--br);padding:10px;border-radius:12px;font-size:12px;color:var(--muted);background:#f8fafc;margin-top:6px}
-.decision-status.accept{border-color:#22c55e66;background:#ecfdf3;color:#166534}
-.decision-status.decline{border-color:#ef444466;background:#fef2f2;color:#b91c1c}
-.footer-note{color:var(--muted);font-size:13px;margin-top:12px;text-align:center}
-hr{border:0;border-top:1px solid var(--br);margin:10px 0}
-.small{font-size:12px;color:var(--muted)}
-.chat-card textarea{width:100%;border:1px solid var(--br);border-radius:10px;padding:10px;font-family:inherit;font-size:14px;min-height:90px;margin:6px 0}
-.muted-note{color:var(--muted);font-size:12px;margin:4px 0 0}
-.pay-note{color:var(--muted);font-size:12px;margin:4px 0 0}
-.refund-note{margin-top:4px;line-height:1.4}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--card);border:1px solid var(--line);font-weight:700;font-size:12px}
+.chip{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;border:1px solid var(--line);font-size:11px;margin-left:6px}
 .li{list-style:none;padding:0;margin:0}
-.qty{font-variant-numeric:tabular-nums;color:var(--muted)}
-.price-line{margin-top:4px;color:var(--muted)}
-.old{display:flex;gap:10px;align-items:center;flex:1;min-width:0}
-.status{display:none;margin:10px 0;padding:12px 14px;border-radius:12px;border:1px solid var(--br);background:#f8fafc;font-size:13px;line-height:1.5}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+button{appearance:none;border:0;border-radius:12px;padding:12px 14px;font-weight:800;cursor:pointer}
+button.primary{background:var(--accent);color:#fff}
+button.secondary{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+button.choice-picked{box-shadow:0 0 0 2px var(--accent)}
+button.secondary.choice-picked{background:var(--accent-soft);color:var(--ink)}
+.decision-status{border:1px dashed var(--line);padding:10px;border-radius:12px;font-size:13px;color:var(--soft);background:#f8fafc;margin-top:6px}
+.decision-status.accept{border-color:#bbf7d0;background:#ecfdf3;color:#166534}
+.decision-status.decline{border-color:#fecdd3;background:#fff1f2;color:#b91c1c}
+.footer-note{color:var(--soft);font-size:13px;text-align:center}
+.small{font-size:13px;color:var(--soft)}
+.chat-card textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:inherit;font-size:14px;min-height:90px}
+.muted-note{color:var(--soft);font-size:12px;margin-top:6px}
+.note-line{color:var(--soft);font-size:13px;margin:4px 0 0}
+.pay-note{color:var(--soft);font-size:12px;margin:4px 0 0}
+.refund-note{margin-top:4px;line-height:1.4}
+.status{display:none;padding:12px;border-radius:14px;border:1px solid var(--line);background:#f8fafc;font-size:13px;line-height:1.5}
 .status.show{display:block}
-.status.success{border-color:#22c55e29;background:#ecfdf3;color:#166534}
-.status.error{border-color:#ef444429;background:#fef2f2;color:#b91c1c}
-.loading-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:50}
+.status.success{border-color:#bbf7d0;background:#ecfdf3;color:#166534}
+.status.error{border-color:#fecdd3;background:#fff1f2;color:#b91c1c}
+.loading-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.35);display:none;align-items:center;justify-content:center;z-index:60}
 .loading-backdrop.visible{display:flex}
-.loading-box{background:#0f172a;color:#fff;padding:16px 18px;border-radius:12px;display:flex;gap:12px;align-items:center;box-shadow:0 10px 30px rgba(0,0,0,.25)}
-.spinner{width:24px;height:24px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;animation:lp-spin 1s linear infinite}
-.summary-header{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.summary-label{font-weight:700;font-size:13px}
-.summary-title{margin:8px 0 4px;font-weight:700}
-.summary-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
-.summary-line{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--ink);flex-wrap:wrap;align-items:flex-start}
-.summary-price{margin-left:auto}
+.loading-box{background:var(--card);padding:18px;border-radius:14px;box-shadow:0 20px 50px rgba(15,23,42,.2);text-align:center;min-width:240px;border:1px solid var(--line)}
+.loading-text{font-weight:700}
+.spinner{width:28px;height:28px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);margin:0 auto 10px;animation:spin 1s linear infinite}
+.summary-header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 10px}
+.summary-label{font-size:13px;color:var(--soft)}
+.summary-price{font-size:12px}
+.summary-title{margin:8px 0 4px;font-weight:800}
+.summary-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.summary-line{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:10px;border:1px solid var(--line);border-radius:10px}
 .summary-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;z-index:60;padding:16px}
 .summary-backdrop.visible{display:flex}
-.summary-modal{background:#fff;max-width:520px;width:100%;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.25);padding:18px;max-height:85vh;overflow:auto}
+.summary-modal{background:#fff;max-width:520px;width:100%;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.2);padding:18px;max-height:85vh;overflow:auto}
 .summary-modal h3{margin:0 0 6px;font-size:18px}
-.summary-modal .small{margin:0 0 12px}
 .summary-section{margin:12px 0 0}
-.summary-section .summary-title{margin-top:0}
-.summary-empty{color:var(--muted);font-size:13px;margin:4px 0 0}
+.summary-empty{color:var(--soft);font-size:13px;margin:4px 0 0}
 .summary-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
-.summary-meta{display:block;font-size:12px;color:var(--muted);margin-top:2px}
-.summary-total{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--br);border-radius:10px;background:#f8fafc;margin:8px 0 12px}
+.summary-meta{display:block;font-size:12px;color:var(--soft);margin-top:2px}
+.summary-total{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#f8fafc;margin:8px 0 12px}
 .summary-total .badge{margin-left:auto}
-.summary-total.negative .badge{background:#ecfdf3;color:#166534;border-color:#22c55e33}
-.summary-total.positive .badge{background:#fef2f2;color:#b91c1c;border-color:#ef444433}
-.final-card{border:1px solid var(--br);background:#f8fafc}
-.lp-step-label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;color:var(--muted);font-size:12px}
+.summary-total.negative .badge{background:#ecfdf3;color:#166534;border-color:#bbf7d0}
+.summary-total.positive .badge{background:#fff1f2;color:#b91c1c;border-color:#fecdd3}
+.lp-step-label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;color:var(--soft);font-size:12px}
 .lp-step-card{position:relative;margin-bottom:8px}
-.lp-step-card.completed-step{border-style:dashed;opacity:.97}
-.lp-step-card.future-step{opacity:1;display:block}
-.lp-step-nav{display:none}
-.note-line{color:var(--muted);font-size:13px;margin:4px 0 0}
-@keyframes lp-spin{to{transform:rotate(360deg)}}
-@media (max-width:480px){ .badge{margin-top:4px; width:100%; justify-content:center;} }
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (max-width:540px){.hero{flex-direction:column;align-items:flex-start}.actions button{width:100%}}
 </style>
         </head>
         <body>
@@ -2850,38 +2922,38 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
          data-nonce="<?php echo esc_attr( wp_create_nonce( 'lp_mpr_portal_action' ) ); ?>"
          data-currency="<?php echo esc_attr( $order->get_currency() ); ?>"
          data-issue-ver="<?php echo esc_attr( $ver ); ?>">
-<div class="loading-backdrop" id="lp-mpr-loading" role="status" aria-live="polite" aria-label="<?php echo esc_attr__( 'Behandler valgene dine …', 'lilleprinsen' ); ?>">
+<div class="loading-backdrop" id="lp-mpr-loading" role="status" aria-live="polite" aria-label="<?php echo esc_attr__( 'Lagrer valgene dine …', 'lilleprinsen' ); ?>">
         <div class="loading-box">
                 <div class="spinner" aria-hidden="true"></div>
-                <div class="loading-text"><?php echo esc_html__( 'Behandler valgene dine …', 'lilleprinsen' ); ?></div>
+                <div class="loading-text"><?php echo esc_html__( 'Lagrer valgene dine …', 'lilleprinsen' ); ?></div>
         </div>
 </div>
 <div class="hero">
-<div class="emoji">🤗</div>
+<div class="emoji">👋</div>
 <div>
 <p class="title"><?php echo sprintf( esc_html__( 'Hei %s!', 'lilleprinsen' ), esc_html( $customer_name ) ); ?></p>
-<p class="subtitle"><?php echo esc_html__( 'Den opprinnelige varen er utsolgt. Velg erstatninger én og én – resten fikser vi for deg. ✨', 'lilleprinsen' ); ?></p>
+<p class="subtitle"><?php echo esc_html__( 'Vi mangler en vare. Velg det som passer best, så ordner vi resten. ✨', 'lilleprinsen' ); ?></p>
 </div>
 </div>
 
 <div class="pills">
-<span class="pill"><span class="emoji">📦</span><span><?php echo esc_html__( 'Originalvaren er utsolgt, men vi har forslag klare til deg.', 'lilleprinsen' ); ?></span></span>
-<span class="pill"><span class="emoji">💸</span><span><?php echo esc_html__( 'Velger du en rimeligere erstatning, fører vi mellomlegget tilbake til deg.', 'lilleprinsen' ); ?></span></span>
+<span class="pill"><span class="emoji">🧭</span><span><?php echo esc_html__( 'Følg stegene. Ett valg om gangen.', 'lilleprinsen' ); ?></span></span>
+<span class="pill"><span class="emoji">😊</span><span><?php echo esc_html__( 'Vi sier fra hvis prisen går opp eller ned.', 'lilleprinsen' ); ?></span></span>
 <?php if ( $cnt_customer_pays && $cnt_store_covers ) : ?>
-<span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Noen alternativer kan gi et lite mellomlegg.', 'lilleprinsen' ); ?></span></span>
+<span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Noen valg gir lite mellomlegg.', 'lilleprinsen' ); ?></span></span>
 <?php elseif ( $cnt_customer_pays ) : ?>
-<span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Mellomlegg betales kun om du velger dyrere vare.', 'lilleprinsen' ); ?></span></span>
+<span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Dyrere valg = lite mellomlegg.', 'lilleprinsen' ); ?></span></span>
 <?php else : ?>
-<span class="pill"><span class="emoji">✅</span><span><?php echo esc_html__( 'Ingen av forslagene koster deg ekstra.', 'lilleprinsen' ); ?></span></span>
+<span class="pill"><span class="emoji">✅</span><span><?php echo esc_html__( 'Forslagene koster deg ikke ekstra.', 'lilleprinsen' ); ?></span></span>
 <?php endif; ?>
-<span class="pill"><span class="emoji">🧾</span><span><?php echo esc_html__( 'Velg én eller flere forslag, maks likt antallet som mangler.', 'lilleprinsen' ); ?></span></span>
+<span class="pill"><span class="emoji">🧾</span><span><?php echo esc_html__( 'Velg maks like mange som mangler.', 'lilleprinsen' ); ?></span></span>
 </div>
 
 <?php if ( $cnt_customer_pays ) : ?>
-<p class="note-line"><?php echo esc_html__( 'Velger du en dyrere erstatning, dekker du mellomlegget. Vi ber deg bekrefte før vi endrer ordren.', 'lilleprinsen' ); ?></p>
+<p class="note-line"><?php echo esc_html__( 'Dyrere valg? Da dekker du mellomlegget når du bekrefter.', 'lilleprinsen' ); ?></p>
 <?php endif; ?>
-<p class="note-line"><?php echo esc_html__( 'Totalsummen på den opprinnelige bestillingen øker ikke – eventuelle mellomlegg blir fakturert i en egen ordre.', 'lilleprinsen' ); ?></p>
-<p class="note-line"><?php echo esc_html__( 'Valgene dine blir lagret først når du godkjenner på siste steg.', 'lilleprinsen' ); ?></p>
+<p class="note-line"><?php echo esc_html__( 'Vi oppdaterer ikke noe før du trykker Bekreft.', 'lilleprinsen' ); ?></p>
+<p class="note-line"><?php echo esc_html__( 'Mellomlegg faktureres i egen ordre.', 'lilleprinsen' ); ?></p>
 
 <div id="lp-mpr-status" class="status" aria-live="polite"></div>
 
@@ -3029,11 +3101,11 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 				echo '<p class="small">' . esc_html__( 'Ingen alternativer oppført for denne linjen. Du kan velge å slette det manglende antallet.', 'lilleprinsen' ) . '</p>';
 			}
 
-                        echo '<div class="decision-status" aria-live="polite">' . esc_html__( 'Velg erstatning eller marker at vi skal slette den manglende varen for å gå videre.', 'lilleprinsen' ) . '</div>';
+                        echo '<div class="decision-status" aria-live="polite">' . esc_html__( 'Velg et alternativ eller be oss slette varen.', 'lilleprinsen' ) . '</div>';
 
                         echo '<div class="actions">';
-                        echo '<button type="button" class="primary" data-action="mark_accept">' . esc_html__( 'Lagre valget mitt for denne varen', 'lilleprinsen' ) . '</button>';
-                        echo '<button type="button" class="secondary" data-action="delete_missing">' . esc_html__( 'Jeg vil slette denne varen i stedet', 'lilleprinsen' ) . '</button>';
+                        echo '<button type="button" class="primary" data-action="mark_accept">' . esc_html__( 'Lagre dette valget', 'lilleprinsen' ) . '</button>';
+                        echo '<button type="button" class="secondary" data-action="delete_missing">' . esc_html__( 'Slett den manglende varen', 'lilleprinsen' ) . '</button>';
                         echo '</div>';
 
 			echo '</div>'; // card
@@ -3041,30 +3113,30 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 		?>
 
                 <div class="card final-card">
-                        <h3><?php echo esc_html__( 'Klar til å bekrefte?', 'lilleprinsen' ); ?></h3>
-                        <p class="small"><?php echo esc_html__( 'Se over valgene dine og bekreft alle endringer samlet til slutt.', 'lilleprinsen' ); ?></p>
+                        <h3><?php echo esc_html__( 'Klar? 👀', 'lilleprinsen' ); ?></h3>
+                        <p class="small"><?php echo esc_html__( 'Trykk for å se en enkel oppsummering før vi oppdaterer ordren.', 'lilleprinsen' ); ?></p>
                         <div class="actions">
-                                <button type="button" class="primary" data-action="open_summary"><?php echo esc_html__( 'Bekreft alle endringer', 'lilleprinsen' ); ?></button>
+                                <button type="button" class="primary" data-action="open_summary"><?php echo esc_html__( 'Bekreft valgene mine', 'lilleprinsen' ); ?></button>
                         </div>
-                        <p class="muted-note"><?php echo esc_html__( 'Du får en tydelig oversikt før vi oppdaterer ordren.', 'lilleprinsen' ); ?></p>
+                        <p class="muted-note"><?php echo esc_html__( 'Vi lagrer alt på én gang når du bekrefter.', 'lilleprinsen' ); ?></p>
                 </div>
 
-                <p class="footer-note"><?php echo esc_html__( 'Vi venter med å oppdatere ordren til du har bekreftet hele oversikten.', 'lilleprinsen' ); ?></p>
+                <p class="footer-note"><?php echo esc_html__( 'Ingenting endres før du har godkjent.', 'lilleprinsen' ); ?></p>
 
                 <div class="card chat-card">
-                        <h3><?php echo esc_html__( 'Passer ikke forslagene?', 'lilleprinsen' ); ?></h3>
-                        <p class="small"><?php echo esc_html__( 'Send oss en melding, så ser kundeservice på ordren din.', 'lilleprinsen' ); ?></p>
+                        <h3><?php echo esc_html__( 'Finner du ikke noe som passer?', 'lilleprinsen' ); ?></h3>
+                        <p class="small"><?php echo esc_html__( 'Send oss en kort melding. Vi svarer på e-post.', 'lilleprinsen' ); ?></p>
                         <textarea id="lp-chat-message" placeholder="<?php echo esc_attr__( 'Fortell oss hva du ønsker …', 'lilleprinsen' ); ?>"></textarea>
                         <div class="actions">
-                                <button type="button" class="secondary" data-action="send_chat"><?php echo esc_html__( 'Send melding til kundeservice', 'lilleprinsen' ); ?></button>
+                                <button type="button" class="secondary" data-action="send_chat"><?php echo esc_html__( 'Send melding', 'lilleprinsen' ); ?></button>
                         </div>
-                        <p class="muted-note"><?php echo esc_html__( 'Vi svarer på e-post og legger ved hele chatten.', 'lilleprinsen' ); ?></p>
+                        <p class="muted-note"><?php echo esc_html__( 'Hele chatten blir med i e-posten.', 'lilleprinsen' ); ?></p>
                 </div>
 
                 <div class="summary-backdrop" id="lp-summary-modal" aria-hidden="true" role="presentation">
                         <div class="summary-modal" role="dialog" aria-modal="true" aria-labelledby="lp-summary-title">
-                                <h3 id="lp-summary-title"><?php echo esc_html__( 'Se over endringene dine', 'lilleprinsen' ); ?></h3>
-                                <p class="small"><?php echo esc_html__( 'Vi oppdaterer først etter at du har bekreftet denne oversikten.', 'lilleprinsen' ); ?></p>
+                                <h3 id="lp-summary-title"><?php echo esc_html__( 'Rask oppsummering', 'lilleprinsen' ); ?></h3>
+                                <p class="small"><?php echo esc_html__( 'Sjekk her før vi gjør endringene.', 'lilleprinsen' ); ?></p>
                                 <div id="lp-summary-replacements" class="summary-section"></div>
                                 <div id="lp-summary-deletions" class="summary-section"></div>
                                 <div class="summary-actions">
@@ -3151,7 +3223,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                 badge.classList.add('decline');
                                 badge.textContent='<?php echo esc_js( __( 'Denne varen blir slettet når du fullfører på siste steg.', 'lilleprinsen' ) ); ?>';
                         } else {
-                                badge.textContent='<?php echo esc_js( __( 'Velg erstatning eller marker sletting før du går videre.', 'lilleprinsen' ) ); ?>';
+                                badge.textContent='<?php echo esc_js( __( 'Si hva vi skal gjøre med varen.', 'lilleprinsen' ) ); ?>';
                         }
                         updateActionButtons(card, state);
                 }
@@ -3216,7 +3288,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                         if(!card.querySelector('.lp-step-label')){
                                                 var label=document.createElement('div');
                                                 label.className='lp-step-label';
-                                                label.innerHTML='<span class="badge step-progress"></span><span class="small"><?php echo esc_js( __( 'Velg erstatning eller sletting for hver vare før du godkjenner.', 'lilleprinsen' ) ); ?></span>';
+                                                label.innerHTML='<span class="badge step-progress"></span><span class="small"><?php echo esc_js( __( 'Gi oss et valg for hver vare før du godkjenner.', 'lilleprinsen' ) ); ?></span>';
                                                 card.insertBefore(label, card.firstChild);
                                         }
                                 updateDecisionBadge(card, selectionDecision(card));
@@ -3231,7 +3303,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         card.querySelectorAll('.lp-choice').forEach(function(c){ c.checked=false; });
                         updateDecisionBadge(card,'decline');
                         updateStepperUI();
-                        showStatus('<?php echo esc_js( __( 'Vi sletter denne varen når du bekrefter alle endringer.', 'lilleprinsen' ) ); ?>','success');
+                        showStatus('<?php echo esc_js( __( 'Vi fjerner varen når du bekrefter.', 'lilleprinsen' ) ); ?>','success');
                         if(stepCards.length>1 && activeStep<stepCards.length-1){ setStep(activeStep+1); }
                 }
                 function onChoiceChange(card){
@@ -3242,12 +3314,12 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 }
                 function markAccept(card){
                         if(!card) return;
-                        if(overChosen(card)){ showStatus('<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>','error'); return; }
+                        if(overChosen(card)){ showStatus('<?php echo esc_js( __( 'Du har valgt for mange varer.', 'lilleprinsen' ) ); ?>','error'); return; }
                         var any = !!card.querySelector('.lp-choice:checked');
-                        if(!any){ showStatus('<?php echo esc_js( __( 'Velg erstatning før du lagrer valget for denne varen.', 'lilleprinsen' ) ); ?>','error'); return; }
+                        if(!any){ showStatus('<?php echo esc_js( __( 'Velg et alternativ først.', 'lilleprinsen' ) ); ?>','error'); return; }
                         updateDecisionBadge(card,'accept');
                         updateStepperUI();
-                        showStatus('<?php echo esc_js( __( 'Valget er lagt til oversikten. Bekreft alle endringer nederst.', 'lilleprinsen' ) ); ?>','success');
+                        showStatus('<?php echo esc_js( __( 'Valget er lagret. Bekreft nederst når du er klar.', 'lilleprinsen' ) ); ?>','success');
                         if(stepCards.length>1 && activeStep<stepCards.length-1){ setStep(activeStep+1); }
                 }
                 function collectChoices(){
@@ -3256,17 +3328,17 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 function validateBeforeSubmit(){
                         var bad=false;
                         host.querySelectorAll('.lp-portal-item').forEach(function(card){ if(overChosen(card)) bad=true; });
-                        if(bad){ return { ok:false, message:'<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>' }; }
+                        if(bad){ return { ok:false, message:'<?php echo esc_js( __( 'Du har valgt for mange varer.', 'lilleprinsen' ) ); ?>' }; }
 
                         var responseCards = cardsRequiringSelection();
                         if(responseCards.length){
                                 var missingAnswers = unansweredCards(responseCards);
-                                if(missingAnswers.length){ return { ok:false, message:'<?php echo esc_js( __( 'Velg erstatning eller sletting for alle varene som mangler.', 'lilleprinsen' ) ); ?>' }; }
+                                if(missingAnswers.length){ return { ok:false, message:'<?php echo esc_js( __( 'Si hva vi skal gjøre for alle varene som mangler.', 'lilleprinsen' ) ); ?>' }; }
                         }
 
                         var choiceData = collectChoices();
                         if(Object.keys(choiceData.selections).length===0 && !choiceData.declines.length){
-                                return { ok:false, message:'<?php echo esc_js( __( 'Velg erstatning eller marker sletting før du går videre.', 'lilleprinsen' ) ); ?>' };
+                                return { ok:false, message:'<?php echo esc_js( __( 'Velg noe før du går videre.', 'lilleprinsen' ) ); ?>' };
                         }
 
                         return { ok:true, selections: choiceData.selections, declines: choiceData.declines };
@@ -3381,7 +3453,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 }
                 function post(which, extra){
                         var now=Date.now(); if(now-lastClick<cooldown) return; lastClick=now;
-                        var loadingText = (extra && extra.loadingText) ? extra.loadingText : '<?php echo esc_js( __( 'Behandler valgene dine …', 'lilleprinsen' ) ); ?>';
+                        var loadingText = (extra && extra.loadingText) ? extra.loadingText : '<?php echo esc_js( __( 'Lagrer valgene dine …', 'lilleprinsen' ) ); ?>';
                         if(extra && extra.loading){ setLoading(true, loadingText); }
                         var fd=new FormData(); fd.append('action','lp_mpr_portal_action'); fd.append('which',which); fd.append('order_id',orderId); fd.append('order_key',orderKey); fd.append('nonce',nonce); fd.append('issue_ver',issueVer);
                         if(extra&&extra.selections){ fd.append('selections', JSON.stringify(extra.selections)); }
