@@ -90,9 +90,60 @@ function lp_mpr_get_product_unit_gross( WC_Product $p, WC_Order $order ) : float
 
 /** Delta (brutto) gitt original enhetsbrutto og valgt produkt * mengde */
 function lp_mpr_calc_delta_gross( float $orig_unit_gross, WC_Product $p, int $qty, WC_Order $order ) : float {
-	$new_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order );
-	$delta = ( $new_unit_gross - $orig_unit_gross ) * max( 0, $qty );
-	return (float) wc_format_decimal( $delta, wc_get_price_decimals() );
+    $new_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order );
+    $delta = ( $new_unit_gross - $orig_unit_gross ) * max( 0, $qty );
+    return (float) wc_format_decimal( $delta, wc_get_price_decimals() );
+}
+
+/** Prisdetaljer for et produkt i ordre-kontekst (per enhet) */
+function lp_mpr_get_product_unit_breakdown_for_order( WC_Product $p, WC_Order $order ) : array {
+        $raw_price = (float) $p->get_price( 'edit' );
+        $tax_class = $p->get_tax_class();
+        $prices_include_tax = wc_prices_include_tax();
+
+        if ( $prices_include_tax ) {
+                $base_rates = WC_Tax::get_base_tax_rates( $tax_class );
+                $base_taxes = WC_Tax::calc_tax( $raw_price, $base_rates, true );
+                $unit_net = $raw_price - array_sum( $base_taxes );
+        } else {
+                $unit_net = $raw_price;
+        }
+
+        $args = array(
+                'country'   => $order->get_shipping_country() ?: $order->get_billing_country(),
+                'state'     => $order->get_shipping_state() ?: $order->get_billing_state(),
+                'postcode'  => $order->get_shipping_postcode() ?: $order->get_billing_postcode(),
+                'city'      => $order->get_shipping_city() ?: $order->get_billing_city(),
+                'tax_class' => $tax_class,
+        );
+        $rates = method_exists( 'WC_Tax', 'find_rates' ) ? WC_Tax::find_rates( $args ) : WC_Tax::get_rates( $tax_class );
+        $taxes = WC_Tax::calc_tax( $unit_net, $rates, false );
+        $unit_tax = array_sum( $taxes );
+        $unit_gross = $unit_net + $unit_tax;
+
+        return array(
+                'unit_net'   => (float) wc_format_decimal( $unit_net, wc_get_price_decimals() ),
+                'unit_tax'   => (float) wc_format_decimal( $unit_tax, wc_get_price_decimals() ),
+                'unit_gross' => (float) wc_format_decimal( $unit_gross, wc_get_price_decimals() ),
+                'taxes'      => $taxes,
+        );
+}
+
+/** Skalerer en taksamling med faktor (for rabatt/antall) */
+function lp_mpr_scale_tax_amounts( array $taxes, float $factor ) : array {
+        $out = array();
+        $factor = max( 0.0, $factor );
+        foreach ( $taxes as $rate_id => $amount ) {
+                $out[ $rate_id ] = (float) wc_format_decimal( (float) $amount * $factor, wc_get_price_decimals() );
+        }
+        return $out;
+}
+
+/** Rabattfaktor (brutto) mellom originalt subtotal og total per enhet */
+function lp_mpr_discount_factor_from_units( float $unit_gross_subtotal, float $unit_gross_total ) : float {
+        if ( $unit_gross_subtotal <= 0 ) return 1.0;
+        $factor = (float) $unit_gross_total / $unit_gross_subtotal;
+        return max( 0.0, min( 1.0, (float) wc_format_decimal( $factor, 6 ) ) );
 }
 
 /** Skaler mva-matrise (beholder per-sats fordeling) */
@@ -226,23 +277,29 @@ function lp_mpr_thumb_html( ?WC_Product $product, string $class = 'lp-thumb', st
         }
 
         $style = 'width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff';
-        $attrs = array(
-                'class'          => $class,
-                'loading'        => 'lazy',
-                'decoding'       => 'async',
-                'alt'            => $alt,
-                'style'          => $style,
-                'referrerpolicy' => 'no-referrer',
+        $common_attrs = array(
+                'class'    => $class,
+                'loading'  => 'lazy',
+                'decoding' => 'async',
+                'alt'      => $alt,
+                'style'    => $style,
         );
 
         if ( $img_id ) {
+                $img_html = wp_get_attachment_image( $img_id, 'thumbnail', false, $common_attrs );
+                if ( $img_html ) {
+                        return $img_html;
+                }
+
                 $url = wp_get_attachment_image_url( $img_id, 'thumbnail' );
                 if ( $url ) {
+                        $attrs = $common_attrs;
                         $attrs['src'] = esc_url_raw( $url );
                         return '<img ' . lp_mpr_render_html_attributes( $attrs ) . ' />';
                 }
         }
 
+        $attrs = $common_attrs;
         $attrs['src'] = wc_placeholder_img_src( 'thumbnail' );
         return '<img ' . lp_mpr_render_html_attributes( $attrs ) . ' />';
 }
@@ -1225,8 +1282,25 @@ function lp_mpr_portal_action() {
 			if ( json_last_error() !== JSON_ERROR_NONE || ! is_array( $decoded ) ) $decoded = maybe_unserialize( $sel_raw );
 			if ( is_array( $decoded ) ) $sel_raw = $decoded;
 		}
-		$selections = is_array( $sel_raw ) ? wc_clean( $sel_raw ) : array();
-		if ( empty( $selections ) ) { $order->add_order_note( 'MPR portal: tomt valg fra kunden.', false ); wp_send_json_error( array( 'message' => __( 'Vi mottok ingen valg.', 'lilleprinsen' ) ) ); }
+          $selections = is_array( $sel_raw ) ? wc_clean( $sel_raw ) : array();
+          if ( empty( $selections ) ) { $order->add_order_note( 'MPR portal: tomt valg fra kunden.', false ); wp_send_json_error( array( 'message' => __( 'Vi mottok ingen valg.', 'lilleprinsen' ) ) ); }
+
+          $respondable = array();
+          foreach ( $data as $row_item_id => $row ) {
+                  $row_item_id = (int) $row_item_id;
+                  if ( empty( $row['enabled'] ) ) continue;
+                  $missing_qty = max( 0, (int) ( $row['qty'] ?? 0 ) );
+                  $has_suggestions = ! empty( $row['suggestions'] );
+                  if ( $missing_qty <= 0 || ! $has_suggestions ) continue;
+                  $respondable[] = $row_item_id;
+          }
+          if ( count( $respondable ) > 1 ) {
+                  foreach ( $respondable as $rid ) {
+                          if ( empty( $selections[ (string) $rid ] ) ) {
+                                  wp_send_json_error( array( 'message' => __( 'Velg et alternativ for alle varene som mangler.', 'lilleprinsen' ) ) );
+                          }
+                  }
+          }
 
 		// Cap mot "missing"
 		foreach ( $selections as $item_id_str => $indexes ) {
@@ -1708,9 +1782,11 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 		$missing = max( 0, (int) $it['missing_qty'] ); $old_qty = (int) $old_item->get_quantity();
 		$allowed = $missing > 0 ? $missing : $old_qty; if ( $allowed <= 0 ) { $order->add_order_note( sprintf('MPR: Hopper over linje %d — allowed_qty=0.',$order_item_id), false ); continue; }
 
-		$unit_gross_subtotal = (float) $it['unit_gross_subtotal']; $unit_gross_total = (float) $it['unit_gross_total'];
-		$unit_tax_subtotal   = (float) $it['unit_tax_subtotal'];   $unit_tax_total  = (float) $it['unit_tax_total'];
-		$tax_class           = (string) $it['tax_class'];
+          $unit_gross_subtotal = (float) $it['unit_gross_subtotal']; $unit_gross_total = (float) $it['unit_gross_total'];
+          $unit_tax_subtotal   = (float) $it['unit_tax_subtotal'];   $unit_tax_total  = (float) $it['unit_tax_total'];
+          $tax_class           = (string) $it['tax_class'];
+
+          $gross_discount_factor = lp_mpr_discount_factor_from_units( $unit_gross_subtotal, $unit_gross_total );
 
 		$old_name = $old_item->get_name(); $old_pid = (int) $it['old_product_id']; $old_vid = (int) $it['old_variation_id'];
 
@@ -1729,20 +1805,22 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 			if ( ! $pid || $qty <= 0 ) continue;
 			$product = wc_get_product( $pid ); if ( ! $product ) continue;
 
-			$scaled_taxes   = lp_mpr_scale_tax_array( $old_line_taxes, max(1,$old_qty), $qty );
-			$subtax_sum2    = array_sum( (array) $scaled_taxes['subtotal'] );
-			$totaltax_sum2  = array_sum( (array) $scaled_taxes['total'] );
+                  $price_data = lp_mpr_get_product_unit_breakdown_for_order( $product, $order );
+                  $tax_map_subtotal = lp_mpr_scale_tax_amounts( $price_data['taxes'], $qty );
+                  $tax_map_total    = lp_mpr_scale_tax_amounts( $price_data['taxes'], $gross_discount_factor * $qty );
 
-			$line = new WC_Order_Item_Product();
-			$line->set_product( $product );
-			$line->set_name( wp_strip_all_tags( $product->get_formatted_name() ) );
-			$line->set_quantity( $qty );
-			$line->set_subtotal( max( 0, ( $unit_gross_subtotal - $unit_tax_subtotal ) ) * $qty );
-			$line->set_total(    max( 0, ( $unit_gross_total    - $unit_tax_total    ) ) * $qty );
-			$line->set_tax_class( $tax_class );
-			$line->set_subtotal_tax( $subtax_sum2 );
-			$line->set_total_tax(    $totaltax_sum2 );
-			$line->set_taxes( array( 'subtotal' => $scaled_taxes['subtotal'], 'total' => $scaled_taxes['total'] ) );
+                  $line = new WC_Order_Item_Product();
+                  $line->set_product( $product );
+                  $line->set_name( wp_strip_all_tags( $product->get_formatted_name() ) );
+                  $line->set_quantity( $qty );
+                  $line->set_subtotal( max( 0, (float) $price_data['unit_net'] ) * $qty );
+                  $line->set_total(    max( 0, (float) $price_data['unit_net'] * $gross_discount_factor ) * $qty );
+                  $line_tax_class = $product->get_tax_class();
+                  if ( '' === $line_tax_class ) $line_tax_class = $tax_class;
+                  $line->set_tax_class( $line_tax_class );
+                  $line->set_subtotal_tax( array_sum( $tax_map_subtotal ) );
+                  $line->set_total_tax(    array_sum( $tax_map_total ) );
+                  $line->set_taxes( array( 'subtotal' => $tax_map_subtotal, 'total' => $tax_map_total ) );
 
 			$order->add_item( $line ); $line->save();
 
@@ -1760,8 +1838,8 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 				'product_id'     => $pid,
 				'name'           => $product->get_name(),
 				'qty'            => $qty,
-				'subtotal_gross' => $unit_gross_subtotal * $qty,
-				'total_gross'    => $unit_gross_total    * $qty,
+                          'subtotal_gross' => (float) wc_format_decimal( (float) $price_data['unit_gross'] * $qty, wc_get_price_decimals() ),
+                          'total_gross'    => (float) wc_format_decimal( (float) $price_data['unit_gross'] * $gross_discount_factor * $qty, wc_get_price_decimals() ),
 				'stock_before'   => $stock_before,
 				'stock_after'    => $stock_after,
 			);
@@ -1824,7 +1902,7 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 				$lines[] = sprintf( '   ↳ + %s (#%d) × %d — %s%s', $n['name'], $n['product_id'], $n['qty'], $price_str, $stock_note );
 			}
 		}
-		$policy = __( 'Politikk: cap per linje; behold brutto per enhet; opprinnelig mva-klasse; rabatter frosset; frakt uendret.', 'lilleprinsen' );
+           $policy = __( 'Politikk: cap per linje; bruk produktpris i ordre-kontekst; behold rabatter; frakt uendret.', 'lilleprinsen' );
 		$order->add_order_note( "🧾 MPR: Erstatning brukt\n" . implode( "\n", $lines ) . "\n" . $policy, false );
 	} else {
 		$order->add_order_note( __( 'ℹ️ MPR: Ingen endringer ble gjort.', 'lilleprinsen' ), false );
@@ -2074,7 +2152,6 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helve
 .choice img{flex:0 0 auto}
 .choice a,.product-link{color:var(--ink);text-decoration:none;display:inline-flex;align-items:center;gap:6px}
 .choice a:focus,.choice a:hover,.product-link:focus,.product-link:hover{color:var(--accent);text-decoration:underline}
-.link-arrow{font-size:12px;line-height:1;color:var(--muted)}
 .screen-reader-text{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
 .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
 button{appearance:none;background:var(--accent);border:0;color:#fff;border-radius:10px;padding:12px 14px;font-weight:700;box-shadow:0 1px 3px rgba(15,23,42,.22)}
@@ -2228,7 +2305,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                         echo '<div style="flex:1;min-width:0">';
                                         if ( $link ) {
                                                 $aria_label = sprintf( __( 'Åpne %s i ny fane', 'lilleprinsen' ), $label );
-                                                echo '<a class="product-link" href="' . esc_url( $link ) . '" target="_blank" rel="noreferrer noopener" aria-label="' . esc_attr( $aria_label ) . '"><strong>' . esc_html( $label ) . '</strong><span class="link-arrow" aria-hidden="true">↗</span></a>';
+                                                echo '<a class="product-link" href="' . esc_url( $link ) . '" target="_blank" rel="noreferrer noopener" aria-label="' . esc_attr( $aria_label ) . '"><strong>' . esc_html( $label ) . '</strong></a>';
                                         } else {
                                                 echo '<strong>' . esc_html( $label ) . '</strong>';
                                         }
@@ -2295,12 +2372,24 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 			});
 			return out;
 		}
-		function overChosen(card){
-			var allowed = parseInt(card.getAttribute('data-missing')||'0',10)||0, chosen=0;
-			card.querySelectorAll('.lp-choice:checked').forEach(function(c){ chosen += parseInt(c.getAttribute('data-qty')||'0',10)||0; });
-			return allowed>0 && chosen>allowed;
-		}
-                function post(which, extra){
+          function overChosen(card){
+                  var allowed = parseInt(card.getAttribute('data-missing')||'0',10)||0, chosen=0;
+                  card.querySelectorAll('.lp-choice:checked').forEach(function(c){ chosen += parseInt(c.getAttribute('data-qty')||'0',10)||0; });
+                  return allowed>0 && chosen>allowed;
+          }
+          function cardsRequiringSelection(){
+                  var cards = [];
+                  host.querySelectorAll('.lp-portal-item').forEach(function(card){
+                          var choices = card.querySelectorAll('.lp-choice');
+                          var missing = parseInt(card.getAttribute('data-missing')||'0',10)||0;
+                          if(choices.length && missing>0){ cards.push(card); }
+                  });
+                  return cards;
+          }
+          function unansweredCards(cards){
+                  return cards.filter(function(card){ return !card.querySelector('.lp-choice:checked'); });
+          }
+          function post(which, extra){
                         var now=Date.now(); if(now-lastClick<cooldown) return; lastClick=now;
                         var loadingText = (extra && extra.loadingText) ? extra.loadingText : '<?php echo esc_js( __( 'Behandler valgene dine …', 'lilleprinsen' ) ); ?>';
                         if(extra && extra.loading){ setLoading(true, loadingText); }
@@ -2329,6 +2418,11 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                 var bad=false; host.querySelectorAll('.lp-portal-item').forEach(function(card){ if(overChosen(card)) bad=true; });
                                 if(bad){ showStatus('<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>','error'); return; }
                                 var sel=selections(); if(Object.keys(sel).length===0){ showStatus('<?php echo esc_js( __( 'Huk av et alternativ først 🙂', 'lilleprinsen' ) ); ?>','error'); return; }
+                                var responseCards = cardsRequiringSelection();
+                                if(responseCards.length>1){
+                                        var missingAnswers = unansweredCards(responseCards);
+                                        if(missingAnswers.length){ showStatus('<?php echo esc_js( __( 'Velg et alternativ for alle varene som mangler.', 'lilleprinsen' ) ); ?>','error'); return; }
+                                }
                                 post('approve_update',{selections:sel,loading:true,loadingText:'<?php echo esc_js( __( 'Oppdaterer ordren din …', 'lilleprinsen' ) ); ?>'});
                         }else if(act==='delete_missing'){
                                 if(confirm('<?php echo esc_js( __( 'Er du sikker på at vi skal slette den manglende varen?', 'lilleprinsen' ) ); ?>')) post('delete_missing',{loading:true});
