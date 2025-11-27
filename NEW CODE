@@ -13,6 +13,7 @@ use WC_Order;
 use WC_Product;
 use WC_Order_Item_Product;
 use WC_Order_Item_Fee;
+use WC_Coupon;
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
@@ -96,8 +97,8 @@ function lp_mpr_calc_delta_gross( float $orig_unit_gross, WC_Product $p, int $qt
 
 /** Skaler mva-matrise (beholder per-sats fordeling) */
 function lp_mpr_scale_tax_array( array $taxes, int $orig_qty, int $new_qty ) : array {
-	$orig_qty = max(1, (int) $orig_qty);
-	$new_qty  = max(0, (int) $new_qty);
+        $orig_qty = max(1, (int) $orig_qty);
+        $new_qty  = max(0, (int) $new_qty);
 	$scale = function( $bucket ) use ( $orig_qty, $new_qty ) {
 		$out = array();
 		foreach ( (array) $bucket as $rate_id => $amount ) {
@@ -106,10 +107,36 @@ function lp_mpr_scale_tax_array( array $taxes, int $orig_qty, int $new_qty ) : a
 		}
 		return $out;
 	};
-	return array(
-		'subtotal' => $scale( $taxes['subtotal'] ?? array() ),
-		'total'    => $scale( $taxes['total']    ?? array() ),
-	);
+        return array(
+                'subtotal' => $scale( $taxes['subtotal'] ?? array() ),
+                'total'    => $scale( $taxes['total']    ?? array() ),
+        );
+}
+
+/** Rabattkontekst for ordren (kun prosentkuponger summeres, max 100%) */
+function lp_mpr_get_discount_context( WC_Order $order ) : array {
+        $percent = 0.0; $codes = array();
+        foreach ( (array) $order->get_coupon_codes() as $code ) {
+                $coupon = new WC_Coupon( $code );
+                if ( ! $coupon->get_id() ) continue;
+                $type = $coupon->get_discount_type();
+                if ( in_array( $type, array( 'percent', 'percent_product' ), true ) ) {
+                        $percent += (float) $coupon->get_amount();
+                        $codes[]  = $coupon->get_code();
+                }
+        }
+        return array(
+                'percent' => max( 0.0, min( 100.0, (float) $percent ) ),
+                'codes'   => array_values( array_unique( $codes ) ),
+        );
+}
+
+/** Påfør prosentvis rabatt på et positivt mellomlegg */
+function lp_mpr_apply_discount_to_delta( float $delta, array $discount_ctx ) : float {
+        $percent = isset( $discount_ctx['percent'] ) ? (float) $discount_ctx['percent'] : 0.0;
+        if ( $delta <= 0 || $percent <= 0 ) return (float) wc_format_decimal( $delta, wc_get_price_decimals() );
+        $factor = max( 0.0, min( 1.0, ( 100.0 - $percent ) / 100.0 ) );
+        return (float) wc_format_decimal( $delta * $factor, wc_get_price_decimals() );
 }
 
 /** Stabil hash for payload (ekskluderer flyktige felt) */
@@ -507,10 +534,12 @@ function lp_render_missing_product_replacement_box( $object ) {
 		return;
 	}
 
-	$saved = (array) $order->get_meta( '_lp_missing_replacements', true );
+        $saved = (array) $order->get_meta( '_lp_missing_replacements', true );
+        $discount_ctx = (array) $order->get_meta( '_lp_mpr_discount_context', true );
+        if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
 
-	wp_nonce_field( 'lp_missing_replacements_save', 'lp_missing_replacements_nonce' );
-	wp_nonce_field( 'lp_mpr_send_suggestion', 'lp_mpr_send_suggestion_nonce' );
+        wp_nonce_field( 'lp_missing_replacements_save', 'lp_missing_replacements_nonce' );
+        wp_nonce_field( 'lp_mpr_send_suggestion', 'lp_mpr_send_suggestion_nonce' );
 
 echo '<style>
 #lp-mpr{padding:10px;background:#f8fafc;border-radius:8px}
@@ -581,7 +610,7 @@ foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
 				if ( $pid && $sq > 0 ) {
 					$p = wc_get_product( $pid );
 					if ( $p ) {
-						$delta = lp_mpr_calc_delta_gross( $orig_unit_gross, $p, $sq, $order );
+                                                $delta = lp_mpr_apply_discount_to_delta( lp_mpr_calc_delta_gross( $orig_unit_gross, $p, $sq, $order ), $discount_ctx );
 						if ( $mode === '' ) $mode = $delta > 0 ? 'customer_pays' : 'store_covers';
 						$suggestions[] = array(
 							'product_id' => $p->get_id(),
@@ -951,13 +980,21 @@ function lp_mpr_send_suggestion() {
 		}
 	}
 
-	if ( ! empty( $clean ) ) {
-		$order->update_meta_data( '_lp_missing_replacements', $clean );
-	} else {
-		$order->delete_meta_data( '_lp_missing_replacements' );
-		$order->save();
-		wp_send_json_error( array( 'message' => __( 'Ingen gyldige forslag å sende.', 'lilleprinsen' ) ) );
-	}
+        if ( ! empty( $clean ) ) {
+                $order->update_meta_data( '_lp_missing_replacements', $clean );
+        } else {
+                $order->delete_meta_data( '_lp_missing_replacements' );
+                $order->save();
+                wp_send_json_error( array( 'message' => __( 'Ingen gyldige forslag å sende.', 'lilleprinsen' ) ) );
+        }
+
+        // Ta vare på rabattkontekst slik at kunden får samme prosent ved oppgradering
+        $discount_ctx = lp_mpr_get_discount_context( $order );
+        if ( $discount_ctx['percent'] > 0 ) {
+                $order->update_meta_data( '_lp_mpr_discount_context', $discount_ctx );
+        } else {
+                $order->delete_meta_data( '_lp_mpr_discount_context' );
+        }
 
 	// Gjenåpne "issue"
 	$issue = (array) $order->get_meta( '_lp_mpr_issue', true );
@@ -983,8 +1020,14 @@ function lp_mpr_send_suggestion() {
 	// Kunde-notat
 	$extra = isset( $_POST['lp_mpr_message'] ) ? wp_kses_post( wp_unslash( $_POST['lp_mpr_message'] ) ) : '';
 	$note  = $extra ? $extra . "\n\n" : '';
-	$note .= sprintf( __( 'Vi har foreslått alternativer for varer vi mangler. Åpne portalen her: %s', 'lilleprinsen' ), esc_url( $url ) );
-	$order->add_order_note( $note, true );
+        $note .= sprintf( __( 'Vi har foreslått alternativer for varer vi mangler. Åpne portalen her: %s', 'lilleprinsen' ), esc_url( $url ) );
+        if ( $discount_ctx['percent'] > 0 && ! empty( $discount_ctx['codes'] ) ) {
+                $note .= "\n\n" . sprintf(
+                        __( 'Vi sørger for at rabatten din (%1$s) også gjelder om du velger et dyrere alternativ.', 'lilleprinsen' ),
+                        implode( ', ', array_map( 'esc_html', $discount_ctx['codes'] ) )
+                );
+        }
+        $order->add_order_note( $note, true );
 
 	do_action( 'lp_mpr_suggestion_emailed', $order, $url, $clean );
 
@@ -1169,25 +1212,35 @@ function lp_mpr_portal_action() {
 		}
 		$order->save();
 
-		// Planlegg APPLY + RELEASE
-		if ( function_exists( 'as_schedule_single_action' ) ) {
-			if ( function_exists( 'as_unschedule_all_actions' ) ) as_unschedule_all_actions( LP_MPR_JOB_ACTION, array( $order->get_id() ), LP_MPR_JOB_GROUP );
-			as_schedule_single_action( time() + lp_mpr_debounce_seconds(), LP_MPR_JOB_ACTION, array( $order->get_id() ), LP_MPR_JOB_GROUP, true );
+                // Planlegg kun frigjøring av reservasjoner og bruk endringene umiddelbart
+                if ( function_exists( 'as_schedule_single_action' ) ) {
+                        if ( function_exists( 'as_unschedule_all_actions' ) ) as_unschedule_all_actions( LP_MPR_RELEASE_JOB_ACTION, array( $order->get_id(), $cur_ver ), LP_MPR_JOB_GROUP );
+                        $res = (array) $order->get_meta( '_lp_mpr_reservations', true );
+                        if ( ! empty( $res['expires_at'] ) ) as_schedule_single_action( (int) $res['expires_at'], LP_MPR_RELEASE_JOB_ACTION, array( $order->get_id(), $cur_ver ), LP_MPR_JOB_GROUP, true );
+                }
 
-			$res = (array) $order->get_meta( '_lp_mpr_reservations', true );
-			if ( ! empty( $res['expires_at'] ) ) as_schedule_single_action( (int) $res['expires_at'], LP_MPR_RELEASE_JOB_ACTION, array( $order->get_id(), $cur_ver ), LP_MPR_JOB_GROUP, true );
+                $issue['consumed'] = true;
+                $order->update_meta_data( '_lp_mpr_issue', $issue );
+                $order->save();
 
-			$issue['consumed'] = true;
-			$order->update_meta_data( '_lp_mpr_issue', $issue );
-			$order->save();
+                try {
+                        $result = lp_mpr_run_apply_job( $order->get_id() ) ?: array();
+                } catch ( Throwable $e ) {
+                        wp_send_json_error( array( 'message' => __( 'Kunne ikke oppdatere ordren akkurat nå.', 'lilleprinsen' ) ) );
+                }
 
-			wp_send_json_success( array( 'ok' => true ) );
-		} else {
-			wp_send_json_error( array( 'message' => __( 'Action Scheduler finnes ikke; kan ikke kjøre i bakgrunnen.', 'lilleprinsen' ) ) );
-		}
-	}
+                $redirect = add_query_arg( 'lp_mpr_done', '1', lp_mpr_build_portal_url( $order, $cur_ver ) );
+                $response = array( 'ok' => true, 'redirect' => esc_url_raw( $redirect ) );
+                if ( ! empty( $result['pending_fee']['order_id'] ) ) {
+                        $child = wc_get_order( (int) $result['pending_fee']['order_id'] );
+                        $response['redirect'] = $child ? $child->get_checkout_payment_url() : esc_url_raw( $redirect );
+                        $response['message']  = __( 'Vi sender deg videre til en trygg betalingsside for mellomlegget.', 'lilleprinsen' );
+                }
 
-	/* ===== delete_missing ===== */
+                wp_send_json_success( $response );
+        }
+
+        /* ===== delete_missing ===== */
 	if ( $which === 'delete_missing' ) {
 		$delete_items = array();
 		foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
@@ -1206,26 +1259,30 @@ function lp_mpr_portal_action() {
 			'created_at'  => time(),
 			'policy'      => array( 'shipping' => 'no_rerate', 'discounts' => 'freeze' ),
 		);
-		$hash = lp_mpr_selection_hash( $payload );
-		$pending = (array) $order->get_meta( '_lp_mpr_pending', true );
-		$pending['hash']    = $hash;
-		$pending['payload'] = $payload;
-		$order->update_meta_data( '_lp_mpr_pending', $pending );
-		$order->save();
+                $hash = lp_mpr_selection_hash( $payload );
+                $pending = (array) $order->get_meta( '_lp_mpr_pending', true );
+                $pending['hash']    = $hash;
+                $pending['payload'] = $payload;
+                $order->update_meta_data( '_lp_mpr_pending', $pending );
+                $order->save();
 
-		if ( function_exists( 'as_schedule_single_action' ) ) {
-			if ( function_exists( 'as_unschedule_all_actions' ) ) as_unschedule_all_actions( LP_MPR_JOB_ACTION, array( $order->get_id() ), LP_MPR_JOB_GROUP );
-			as_schedule_single_action( time() + lp_mpr_debounce_seconds(), LP_MPR_JOB_ACTION, array( $order->get_id() ), LP_MPR_JOB_GROUP, true );
+                if ( function_exists( 'as_schedule_single_action' ) && function_exists( 'as_unschedule_all_actions' ) ) {
+                        as_unschedule_all_actions( LP_MPR_RELEASE_JOB_ACTION, array( $order->get_id(), $cur_ver ), LP_MPR_JOB_GROUP );
+                }
 
-			$issue['consumed'] = true;
-			$order->update_meta_data( '_lp_mpr_issue', $issue );
-			$order->save();
+                $issue['consumed'] = true;
+                $order->update_meta_data( '_lp_mpr_issue', $issue );
+                $order->save();
 
-			wp_send_json_success( array( 'ok' => true ) );
-		} else {
-			wp_send_json_error( array( 'message' => __( 'Action Scheduler finnes ikke; kan ikke kjøre i bakgrunnen.', 'lilleprinsen' ) ) );
-		}
-	}
+                try {
+                        lp_mpr_run_apply_job( $order->get_id() );
+                } catch ( Throwable $e ) {
+                        wp_send_json_error( array( 'message' => __( 'Kunne ikke oppdatere ordren akkurat nå.', 'lilleprinsen' ) ) );
+                }
+
+                $redirect = add_query_arg( 'lp_mpr_done', '1', lp_mpr_build_portal_url( $order, $cur_ver ) );
+                wp_send_json_success( array( 'ok' => true, 'redirect' => esc_url_raw( $redirect ) ) );
+        }
 
 	wp_send_json_success( array( 'ok' => true ) );
 }
@@ -1309,8 +1366,11 @@ add_action( 'wp_ajax_lp_mpr_preview_delta', function () {
 		wp_send_json_success( array( 'html' => wp_kses_post( wc_price( 0, array( 'currency' => $order ? $order->get_currency() : get_woocommerce_currency() ) ) ) ) );
 	}
 
-	$unit = lp_mpr_get_line_unit_prices( $order, $item );
-	$delta = lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $qty, $order );
+        $unit = lp_mpr_get_line_unit_prices( $order, $item );
+        $delta = lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $qty, $order );
+        $discount_ctx = (array) $order->get_meta( '_lp_mpr_discount_context', true );
+        if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
+        $delta = lp_mpr_apply_discount_to_delta( $delta, $discount_ctx );
 	$sign  = $delta > 0 ? '+ ' : ( $delta < 0 ? '− ' : '' );
 	$html  = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
 	wp_send_json_success( array( 'html' => wp_kses_post( $html ) ) );
@@ -1390,29 +1450,30 @@ function lp_mpr_acquire_lock( $order_id ) : bool { $key = 'lp_mpr_lock_order_' .
 function lp_mpr_release_lock( $order_id ) : void { delete_transient( 'lp_mpr_lock_order_' . (int) $order_id ); }
 
 function lp_mpr_run_apply_job( $order_id ) {
-	$order_id = absint( $order_id ); $order = wc_get_order( $order_id ); if ( ! $order ) return;
-	if ( ! lp_mpr_acquire_lock( $order_id ) ) { if ( function_exists( 'as_schedule_single_action' ) ) as_schedule_single_action( time() + 30, LP_MPR_JOB_ACTION, array( $order->get_id() ), LP_MPR_JOB_GROUP, true ); $order->add_order_note( 'MPR: Jobb hoppet over pga. aktiv lås; planlagt ny kjøring.', false ); return; }
-	try {
-		$pending = (array) $order->get_meta( '_lp_mpr_pending', true );
-		if ( empty( $pending['hash'] ) || empty( $pending['payload'] ) ) { $order->add_order_note( __( 'MPR: Ingen ventende payload å bruke.', 'lilleprinsen' ), false ); return; }
-		$hash    = (string) $pending['hash'];
-		$payload = (array) $pending['payload'];
+        $order_id = absint( $order_id ); $order = wc_get_order( $order_id ); if ( ! $order ) return;
+        if ( ! lp_mpr_acquire_lock( $order_id ) ) { if ( function_exists( 'as_schedule_single_action' ) ) as_schedule_single_action( time() + 30, LP_MPR_JOB_ACTION, array( $order->get_id() ), LP_MPR_JOB_GROUP, true ); $order->add_order_note( 'MPR: Jobb hoppet over pga. aktiv lås; planlagt ny kjøring.', false ); return null; }
+        $result = null;
+        try {
+                $pending = (array) $order->get_meta( '_lp_mpr_pending', true );
+                if ( empty( $pending['hash'] ) || empty( $pending['payload'] ) ) { $order->add_order_note( __( 'MPR: Ingen ventende payload å bruke.', 'lilleprinsen' ), false ); return null; }
+                $hash    = (string) $pending['hash'];
+                $payload = (array) $pending['payload'];
 
-		$applied_map = (array) $order->get_meta( '_lp_mpr_applied', true );
-		if ( ! empty( $applied_map[ $hash ] ) ) { $order->add_order_note( __( 'MPR: Payload allerede brukt (idempotent).', 'lilleprinsen' ), false ); return; }
+                $applied_map = (array) $order->get_meta( '_lp_mpr_applied', true );
+                if ( ! empty( $applied_map[ $hash ] ) ) { $order->add_order_note( __( 'MPR: Payload allerede brukt (idempotent).', 'lilleprinsen' ), false ); return null; }
 
-		$blocked = apply_filters( 'lp_mpr_blocked_statuses', array( 'cancelled', 'refunded', 'failed' ) );
-		if ( in_array( $order->get_status(), $blocked, true ) ) throw new Exception( 'Ordre har avsluttende status: ' . $order->get_status() );
+                $blocked = apply_filters( 'lp_mpr_blocked_statuses', array( 'cancelled', 'refunded', 'failed' ) );
+                if ( in_array( $order->get_status(), $blocked, true ) ) throw new Exception( 'Ordre har avsluttende status: ' . $order->get_status() );
 
-		do_action( 'lp_mpr_before_apply', $order, $payload );
-		$result = lp_mpr_apply_replacements_atomic_v2( $order, $payload );
+                do_action( 'lp_mpr_before_apply', $order, $payload );
+                $result = lp_mpr_apply_replacements_atomic_v2( $order, $payload );
 
-		if ( ! empty( $result['pending_fee'] ) ) {
-			$amount = (float) ( $result['pending_fee']['amount'] ?? 0.0 );
-			$order->add_order_note( sprintf( __( 'MPR: Venter på tilleggsbetaling (%s). Varer er reservert inntil fristen.', 'lilleprinsen' ), wc_price( $amount, array( 'currency' => $order->get_currency() ) ) ), true );
-			$order->save();
-			return;
-		}
+                if ( ! empty( $result['pending_fee'] ) ) {
+                        $amount = (float) ( $result['pending_fee']['amount'] ?? 0.0 );
+                        $order->add_order_note( sprintf( __( 'MPR: Venter på tilleggsbetaling (%s). Varer er reservert inntil fristen.', 'lilleprinsen' ), wc_price( $amount, array( 'currency' => $order->get_currency() ) ) ), true );
+                        $order->save();
+                        return $result;
+                }
 
 		$applied_map[ $hash ] = array( 'applied_at' => time(), 'v' => 2 );
 		$order->update_meta_data( '_lp_mpr_applied', $applied_map );
@@ -1428,11 +1489,12 @@ function lp_mpr_run_apply_job( $order_id ) {
 		do_action( 'lp_mpr_after_apply', $order, $result );
 		lp_mpr_send_customer_confirmation( $order, $result );
 
-	} catch ( Throwable $e ) {
-		$order->add_order_note( sprintf( __( 'MPR feilet: %s', 'lilleprinsen' ), $e->getMessage() ), false );
-		do_action( 'lp_mpr_apply_failed', $order, $e );
-		throw $e;
-	} finally { lp_mpr_release_lock( $order_id ); }
+        } catch ( Throwable $e ) {
+                $order->add_order_note( sprintf( __( 'MPR feilet: %s', 'lilleprinsen' ), $e->getMessage() ), false );
+                do_action( 'lp_mpr_apply_failed', $order, $e );
+                throw $e;
+        } finally { lp_mpr_release_lock( $order_id ); }
+        return $result;
 }
 add_action( 'plugins_loaded', function () {
 	add_action( LP_MPR_JOB_ACTION,         'lp_mpr_run_apply_job',       10, 1 );
@@ -1462,9 +1524,11 @@ function lp_mpr_release_reservations( $order_id, $issue_ver = 0 ) {
 function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) : array {
 	if ( ! empty( $payload['delete_only'] ) ) return lp_mpr_apply_delete_only( $order, $payload );
 
-	$policy          = (array) ( $payload['policy'] ?? array() );
-	$old_stock_mode  = $policy['stock']['old'] ?? 'decrease';
-	$cap_enabled     = true;
+        $policy          = (array) ( $payload['policy'] ?? array() );
+        $old_stock_mode  = $policy['stock']['old'] ?? 'decrease';
+        $cap_enabled     = true;
+        $discount_ctx    = (array) $order->get_meta( '_lp_mpr_discount_context', true );
+        if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
 
 	$delta_gross_sum = 0.0; $delta_by_line = array();
 
@@ -1487,8 +1551,9 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
 
 			$p = wc_get_product( absint( $rep['product_id'] ) );
 			if ( ! $p ) { $left -= $qty; continue; }
-			$repl_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order );
-			$diff = max( 0, $repl_unit_gross - $orig_unit_gross ) * $qty; // Kunde betaler kun POSITIVT mellomlegg
+                        $repl_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order );
+                        $diff_raw = max( 0, $repl_unit_gross - $orig_unit_gross ) * $qty; // Kunde betaler kun POSITIVT mellomlegg
+                        $diff = lp_mpr_apply_discount_to_delta( $diff_raw, $discount_ctx );
 			$d_line += $diff;
 			$left -= $qty;
 		}
@@ -1862,6 +1927,8 @@ $customer_name = trim( $order->get_billing_first_name() . ' ' . $order->get_bill
 if ( ! $customer_name ) $customer_name = (string) $order->get_billing_company();
 if ( ! $customer_name ) $customer_name = (string) $order->get_formatted_billing_full_name();
 if ( ! $customer_name ) $customer_name = __( 'venn', 'lilleprinsen' );
+$discount_ctx = (array) $order->get_meta( '_lp_mpr_discount_context', true );
+if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
 
 ?><!doctype html>
 <html <?php language_attributes(); ?>>
@@ -1935,6 +2002,10 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 </div>
 
 <?php
+if ( isset( $_GET['lp_mpr_done'] ) ) {
+echo '<div class="card"><p><strong>' . esc_html__( 'Takk! Vi har oppdatert ordren din.', 'lilleprinsen' ) . '</strong></p><p class="small">' . esc_html__( 'Du kan lukke siden eller følge med på e-post for bekreftelse.', 'lilleprinsen' ) . '</p></div>';
+}
+
 if ( empty( $data ) ) {
 echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkurat nå.', 'lilleprinsen' ) . '</p></div>';
 }
@@ -1976,7 +2047,8 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 					$label = $p ? wp_strip_all_tags( $p->get_formatted_name() ) : '#' . $pid;
 					$link  = ( $p && $p->is_visible() ) ? get_permalink( $p->get_id() ) : '';
 
-					$delta = $p ? lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $sq, $order ) : 0.0;
+                                        $delta = $p ? lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $sq, $order ) : 0.0;
+                                        $delta = lp_mpr_apply_discount_to_delta( $delta, $discount_ctx );
 					$sign  = $delta > 0 ? '+ ' : ( $delta < 0 ? '− ' : '' );
 					$delta_html = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
                                         $chip = $mode === 'store_covers' ? esc_html__( 'Butikken dekker', 'lilleprinsen' ) : esc_html__( 'Kunde betaler', 'lilleprinsen' );
@@ -2017,7 +2089,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         <p class="muted-note"><?php echo esc_html__( 'Vi svarer på e-post og legger ved hele chatten.', 'lilleprinsen' ); ?></p>
                 </div>
 
-                <p class="footer-note"><?php echo esc_html__( 'Vi gjør endringen i bakgrunnen og oppdaterer ordren din straks.', 'lilleprinsen' ); ?></p>
+                <p class="footer-note"><?php echo esc_html__( 'Vi oppdaterer ordren med en gang og viser deg neste steg.', 'lilleprinsen' ); ?></p>
         </div>
 
 	<script>
@@ -2046,16 +2118,16 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         if(extra&&extra.selections){ fd.append('selections', JSON.stringify(extra.selections)); }
                         if(extra&&extra.message){ fd.append('message', extra.message); }
                         fetch(ajax,{method:'POST',body:fd,credentials:'same-origin'}).then(function(r){return r.json().catch(function(){return {success:false,data:{message:'Ugyldig svar'}};});}).then(function(resp){
+                                var data = (resp && resp.data) ? resp.data : {};
                                 if(resp && resp.success){
-                                        var okMsg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Takk! Vi tar det herfra.';
+                                        if(data.redirect){ window.location = data.redirect; return; }
+                                        var okMsg = data.message ? data.message : 'Takk! Vi tar det herfra.';
                                         alert(okMsg);
                                         if(which==='send_chat'){
                                                 var field=document.getElementById('lp-chat-message'); if(field) field.value='';
-                                        }else{
-                                                location.reload();
                                         }
                                 }
-                                else { alert((resp&&resp.data&&resp.data.message)||'Noe gikk galt.'); }
+                                else { alert((data && data.message)||'Noe gikk galt.'); }
                         }).catch(function(){ alert('Nettverksfeil.'); });
                 }
 
