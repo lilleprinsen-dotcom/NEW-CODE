@@ -926,6 +926,7 @@ button.secondary.choice-picked{background:var(--accent-soft);color:var(--ink)}
 .muted-note{color:var(--soft);font-size:12px;margin-top:6px}
 .note-line{color:var(--soft);font-size:13px;margin:4px 0 0}
 .pay-note{color:var(--soft);font-size:12px;margin:4px 0 0}
+.coupon-note{color:var(--soft);font-size:12px;margin:4px 0 0}
 .refund-note{margin-top:4px;line-height:1.4}
 .status{display:none;padding:12px;border-radius:14px;border:1px solid var(--line);background:#f8fafc;font-size:13px;line-height:1.5}
 .status.show{display:block}
@@ -1518,6 +1519,19 @@ function lp_mpr_send_suggestion() {
 
         // Ta vare på rabattkontekst slik at kunden får samme prosent ved oppgradering
         $discount_ctx = lp_mpr_get_discount_context( $order );
+        $has_coupon_codes   = $discount_ctx['percent'] > 0 && ! empty( $discount_ctx['codes'] );
+        $coupon_applies_any = false;
+        if ( $has_coupon_codes ) {
+                foreach ( $clean as $row ) {
+                        foreach ( (array) ( $row['suggestions'] ?? array() ) as $suggestion ) {
+                                $product = wc_get_product( absint( $suggestion['product_id'] ?? 0 ) );
+                                if ( $product ) {
+                                        $coupon_factor = lp_mpr_get_coupon_factor_for_product( $product, $order );
+                                        if ( ! empty( $coupon_factor['applies'] ) ) { $coupon_applies_any = true; break 2; }
+                                }
+                        }
+                }
+        }
         if ( $discount_ctx['percent'] > 0 ) {
                 $order->update_meta_data( '_lp_mpr_discount_context', $discount_ctx );
         } else {
@@ -1554,7 +1568,7 @@ function lp_mpr_send_suggestion() {
 	$extra = isset( $_POST['lp_mpr_message'] ) ? wp_kses_post( wp_unslash( $_POST['lp_mpr_message'] ) ) : '';
         $note  = $extra ? $extra . "\n\n" : '';
         $note .= sprintf( __( 'Vi har foreslått alternativer for varer vi mangler. Åpne portalen her: %s', 'lilleprinsen' ), esc_url( $url ) );
-        if ( $discount_ctx['percent'] > 0 && ! empty( $discount_ctx['codes'] ) ) {
+        if ( $coupon_applies_any ) {
                 $note .= "\n\n" . sprintf(
                         __( 'Vi sørger for at rabatten din (%1$s) også gjelder om du velger et dyrere alternativ.', 'lilleprinsen' ),
                         implode( ', ', array_map( 'esc_html', $discount_ctx['codes'] ) )
@@ -1572,6 +1586,7 @@ add_action( 'lp_mpr_suggestion_emailed', function( WC_Order $order, string $url,
 
         $discount_ctx = (array) $order->get_meta( '_lp_mpr_discount_context', true );
         if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
+        $has_coupon_codes = ! empty( $discount_ctx['codes'] );
 
         $lines = array();
         foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
@@ -1605,7 +1620,16 @@ add_action( 'lp_mpr_suggestion_emailed', function( WC_Order $order, string $url,
                                 ? __( 'Butikken dekker mellomlegget', 'lilleprinsen' )
                                 : __( 'Kunde betaler mellomlegget', 'lilleprinsen' );
 
-                        $suggestion_lines[] = sprintf( '%s × %d — %s (%s)', $name, $qty, $delta_label, $payer_label );
+                        $coupon_note = '';
+                        if ( $has_coupon_codes ) {
+                                if ( $coupon_applied ) {
+                                        $coupon_note = ' (' . sprintf( __( 'Vi sørger for at rabatten din (%s) også gjelder om du velger et dyrere alternativ.', 'lilleprinsen' ), implode( ', ', array_map( 'wp_strip_all_tags', $discount_ctx['codes'] ) ) ) . ')';
+                                } else {
+                                        $coupon_note = ' (' . __( 'Rabattkoden din gjelder ikke for denne varen', 'lilleprinsen' ) . ')';
+                                }
+                        }
+
+                        $suggestion_lines[] = sprintf( '%s × %d — %s (%s)%s', $name, $qty, $delta_label, $payer_label, $coupon_note );
                 }
 
                 if ( ! empty( $suggestion_lines ) ) {
@@ -2973,6 +2997,7 @@ if ( ! $customer_name ) $customer_name = (string) $order->get_formatted_billing_
 if ( ! $customer_name ) $customer_name = __( 'venn', 'lilleprinsen' );
 $discount_ctx = (array) $order->get_meta( '_lp_mpr_discount_context', true );
 if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
+$has_coupon_codes = ! empty( $discount_ctx['codes'] );
 $summary_key   = isset( $_GET['lp_mpr_summary'] ) ? sanitize_text_field( wp_unslash( $_GET['lp_mpr_summary'] ) ) : '';
 $summary_data  = $summary_key ? lp_mpr_consume_customer_summary( $summary_key, $order ) : array();
 
@@ -3025,6 +3050,7 @@ button.secondary.choice-picked{background:var(--accent-soft);color:var(--ink)}
 .muted-note{color:var(--soft);font-size:12px;margin-top:6px}
 .note-line{color:var(--soft);font-size:13px;margin:4px 0 0}
 .pay-note{color:var(--soft);font-size:12px;margin:4px 0 0}
+.coupon-note{color:var(--soft);font-size:12px;margin:4px 0 0}
 .refund-note{margin-top:4px;line-height:1.4}
 .status{display:none;padding:12px;border-radius:14px;border:1px solid var(--line);background:#f8fafc;font-size:13px;line-height:1.5}
 .status.show{display:block}
@@ -3217,6 +3243,14 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                         $mode_label = $mode === 'store_covers' ? esc_html__( 'Butikken dekker mellomlegget', 'lilleprinsen' ) : esc_html__( 'Kunde betaler mellomlegget', 'lilleprinsen' );
                                         $credit_note = $delta < 0 ? '<div class="small refund-note">' . esc_html__( 'Denne er billigere – vi ordner mellomlegget tilbake til deg.', 'lilleprinsen' ) . '</div>' : '';
                                         $paying_note = ( $mode === 'customer_pays' && $delta > 0 ) ? '<div class="pay-note">' . esc_html__( 'Velger du denne, betaler du mellomlegget for prisforskjellen.', 'lilleprinsen' ) . '</div>' : '';
+                                        $coupon_note = '';
+                                        if ( $has_coupon_codes ) {
+                                                if ( $coupon_applied ) {
+                                                        $coupon_note = '<div class="coupon-note">' . sprintf( esc_html__( 'Vi sørger for at rabatten din (%s) også gjelder om du velger et dyrere alternativ', 'lilleprinsen' ), esc_html( implode( ', ', array_map( 'wp_strip_all_tags', (array) $discount_ctx['codes'] ) ) ) ) . '</div>';
+                                                } else {
+                                                        $coupon_note = '<div class="coupon-note">' . esc_html__( 'Rabattkoden din gjelder ikke for denne varen', 'lilleprinsen' ) . '</div>';
+                                                }
+                                        }
                                         $chip_html = $delta > 0 ? '<span class="chip">' . esc_html( $chip ) . '</span>' : '';
 
                                         echo '<li class="choice" data-delta="' . esc_attr( $delta ) . '" data-delta-display="' . esc_attr( $delta_plain ) . '" data-payer="' . esc_attr( $mode ) . '" data-payer-label="' . esc_attr( $mode_label ) . '">';
@@ -3236,7 +3270,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                         if ( $discounted_price_html ) {
                                                 echo '<div class="small price-line">' . sprintf( esc_html__( 'Pris med rabatt: %s', 'lilleprinsen' ), wp_kses_post( $discounted_price_html ) ) . '</div>';
                                         }
-                                        echo $credit_note . $paying_note;
+                                        echo $credit_note . $paying_note . $coupon_note;
                                         echo '</div>';
                                         echo '<div><span class="badge" title="' . esc_attr__( 'Prisforskjell', 'lilleprinsen' ) . '">' . wp_kses_post( $delta_html ) . '</span>' . $chip_html . '</div>';
                                         echo '</li>';
