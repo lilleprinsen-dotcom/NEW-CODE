@@ -2196,6 +2196,30 @@ function lp_mpr_apply_delete_only( WC_Order $order, array $payload ) : array {
         return array( 'changes'=>$changes, 'pricing' => $pricing );
 }
 
+function lp_mpr_describe_delta_reasons( WC_Order $order, array $delta_by_line ) : string {
+        $parts = array();
+        foreach ( $delta_by_line as $line_id => $delta ) {
+                if ( (float) $delta <= 0.0 ) continue;
+                $item = $order->get_item( $line_id );
+                if ( ! $item || 'line_item' !== $item->get_type() ) continue;
+                $name = wp_strip_all_tags( $item->get_name() );
+                $qty  = max( 0, (int) $item->get_quantity() );
+                $parts[] = $qty > 0
+                        ? sprintf( _x( '%1$s × %2$d', 'product name × quantity', 'lilleprinsen' ), $name, $qty )
+                        : $name;
+        }
+
+        $parts = array_filter( array_map( 'trim', $parts ) );
+        if ( empty( $parts ) ) return '';
+
+        if ( count( $parts ) > 3 ) {
+                $parts = array_slice( $parts, 0, 3 );
+                $parts[] = __( 'm.fl.', 'lilleprinsen' );
+        }
+
+        return implode( ', ', $parts );
+}
+
 function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : array {
         $changes = array(); $old_stock_mode = $opts['old_stock_mode'] ?? 'decrease'; $cap_enabled = ! empty( $opts['cap'] );
         $cap_total_at = array_key_exists( 'cap_total_at', $opts ) ? (float) wc_format_decimal( $opts['cap_total_at'], wc_get_price_decimals() ) : null;
@@ -2316,11 +2340,16 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
         $order->calculate_totals(); $order->save();
 
         $current_total = (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
-        $paid_on_other_order = 0.0;
+        $paid_on_other_order = 0.0; $fee_reason = ''; $fee_order = null;
         if ( $fee_order_id ) {
                 $fee_order = wc_get_order( $fee_order_id );
                 if ( $fee_order ) {
                         $paid_on_other_order = (float) wc_format_decimal( $fee_order->get_total(), wc_get_price_decimals() );
+                        $fee_reason = (string) $fee_order->get_meta( '_lp_mpr_fee_reason', true );
+                        if ( '' === $fee_reason ) {
+                                $fee_delta_map = (array) $fee_order->get_meta( '_lp_mpr_delta_breakdown', true );
+                                $fee_reason    = lp_mpr_describe_delta_reasons( $order, $fee_delta_map );
+                        }
                 }
         }
 
@@ -2329,9 +2358,16 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 
         if ( $discount_amount > 0 ) {
                 $discount_label = sprintf( __( 'Mellomlegg betalt på Ordre %s', 'lilleprinsen' ), $fee_order_id ? $fee_order_id : $order->get_order_number() );
+                $discount_label_base = $discount_label;
+                if ( $fee_reason ) {
+                        $discount_label = sprintf( __( '%1$s — %2$s', 'lilleprinsen' ), $discount_label, $fee_reason );
+                }
 
                 foreach ( $order->get_items( 'fee' ) as $fee_item ) {
-                        if ( $discount_label === $fee_item->get_name() ) $order->remove_item( $fee_item->get_id() );
+                        $fee_name = $fee_item->get_name();
+                        if ( $discount_label === $fee_name || ( isset( $discount_label_base ) && $discount_label_base === $fee_name ) ) {
+                                $order->remove_item( $fee_item->get_id() );
+                        }
                 }
 
                 $tax_lines = $order->get_taxes(); $tax_totals = array(); $tax_total_sum = 0.0;
@@ -2415,11 +2451,17 @@ function lp_mpr_create_extra_fee_order( WC_Order $parent, array $payload, float 
 	$child->set_address( $parent->get_address( 'billing' ), 'billing' );
 	$child->set_address( $parent->get_address( 'shipping' ), 'shipping' );
 
-	$fee = new WC_Order_Item_Fee();
-	$fee->set_name( __( 'Tilleggsbetaling for erstatningsvarer', 'lilleprinsen' ) );
-	$fee->set_amount( $amount_gross );
-	$fee->set_total(  $amount_gross );
-	$fee->set_tax_status( 'none' );
+        $fee = new WC_Order_Item_Fee();
+        $fee_label = __( 'Tilleggsbetaling for erstatningsvarer', 'lilleprinsen' );
+        $fee_reason = lp_mpr_describe_delta_reasons( $parent, $delta_by_line );
+        if ( $fee_reason ) {
+                $fee_label = sprintf( __( '%1$s — %2$s', 'lilleprinsen' ), $fee_label, $fee_reason );
+                $fee->update_meta_data( '_lp_mpr_fee_reason', $fee_reason );
+        }
+        $fee->set_name( $fee_label );
+        $fee->set_amount( $amount_gross );
+        $fee->set_total(  $amount_gross );
+        $fee->set_tax_status( 'none' );
 	$child->add_item( $fee );
 
 	$child->set_currency( $parent->get_currency() );
@@ -3217,7 +3259,8 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                         var deltaTxt = li ? (li.getAttribute('data-delta-display')||'') : '';
                                         var deltaNum = li ? (parseFloat(li.getAttribute('data-delta')||'0')||0) : 0;
                                         var payerLabel = li ? (li.getAttribute('data-payer-label')||'') : '';
-                                        picked.push({name:chosenName, qty:qty, deltaText:deltaTxt, deltaNumber:deltaNum, payerLabel:payerLabel});
+                                        var payer = li ? (li.getAttribute('data-payer')||'') : '';
+                                        picked.push({name:chosenName, qty:qty, deltaText:deltaTxt, deltaNumber:deltaNum, payerLabel:payerLabel, payer:payer});
                                 });
                                 if(picked.length){ data.replacements.push({item:itemName, choices:picked}); }
                         });
@@ -3225,10 +3268,12 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 }
                 function renderSummaryView(data){
                         if(!summaryModal) return;
-                        var totalDelta=0;
+                        var totalDelta=0, hasNegative=false, hasCustomerPaysPositive=false;
                         data.replacements.forEach(function(entry){
                                 entry.choices.forEach(function(choice){
                                         totalDelta += choice.deltaNumber || 0;
+                                        if(choice.deltaNumber>0 && choice.payer==='customer_pays'){ hasCustomerPaysPositive=true; }
+                                        if(choice.deltaNumber<0){ hasNegative=true; }
                                 });
                         });
                         if(summaryReplacements){
@@ -3246,6 +3291,12 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                         totalBox.appendChild(totalLabel);
                                         totalBox.appendChild(totalBadge);
                                         summaryReplacements.appendChild(totalBox);
+                                        if(hasCustomerPaysPositive && hasNegative && totalDelta>0){
+                                                var nettingNote=document.createElement('p');
+                                                nettingNote.className='note-line small';
+                                                nettingNote.textContent='<?php echo esc_js( __( 'Vi refunderer de rimeligere varene til den opprinnelige betalingen, og tar mellomlegget for dyrere varer som en egen trygg betaling.', 'lilleprinsen' ) ); ?>';
+                                                summaryReplacements.appendChild(nettingNote);
+                                        }
                                 }
                                 if(data.replacements.length){
                                         data.replacements.forEach(function(entry){
