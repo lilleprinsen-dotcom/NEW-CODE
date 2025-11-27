@@ -2267,19 +2267,21 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
         // C: Totalsum lavere → bare bytt, ingen mellomlegg
         // D: Blandet (+1000/-500) → nettopositivt? betal; ellers bytt uten betaling
         if ( $delta_gross_sum > 0 && $pricing['estimated_order_delta'] > 0 ) {
-                $child = lp_mpr_create_extra_fee_order( $order, $payload, $delta_gross_sum, $delta_by_line, $pair_lines );
+                $fee_amount = max( 0.0, $pricing['estimated_order_delta'] );
+                $child = lp_mpr_create_extra_fee_order( $order, $payload, $fee_amount, $delta_by_line, $pair_lines );
                 $order->update_meta_data( '_lp_mpr_child_fee_order_id', $child->get_id() ); $order->save();
-                lp_mpr_email_extra_fee_invoice( $order, $child, $delta_gross_sum );
-                $pricing['order_total_after']      = (float) wc_format_decimal( $pricing['order_total_before'] + $delta_gross_sum, wc_get_price_decimals() );
+                lp_mpr_email_extra_fee_invoice( $order, $child, $fee_amount );
+                $pricing['delta_gross_sum']        = $fee_amount;
+                $pricing['order_total_after']      = (float) wc_format_decimal( $pricing['order_total_before'] + $pricing['estimated_order_delta'], wc_get_price_decimals() );
                 $pricing['order_total_after_html'] = wp_kses_post( wc_price( $pricing['order_total_after'], array( 'currency' => $order->get_currency() ) ) );
                 $pricing['order_total_before_html']= wp_kses_post( wc_price( $pricing['order_total_before'], array( 'currency' => $order->get_currency() ) ) );
-                $pricing['order_total_delta']      = $delta_gross_sum;
-                $pricing['order_total_delta_html'] = wp_kses_post( wc_price( abs( $delta_gross_sum ), array( 'currency' => $order->get_currency() ) ) );
+                $pricing['order_total_delta']      = $pricing['estimated_order_delta'];
+                $pricing['order_total_delta_html'] = wp_kses_post( wc_price( abs( $pricing['estimated_order_delta'] ), array( 'currency' => $order->get_currency() ) ) );
                 $pricing['order_total_html']       = $pricing['order_total_after_html'];
                 $pricing['delta_payer']            = 'customer';
                 if ( ! empty( $pair_lines ) ) $pricing['old_new_pairs'] = $pair_lines;
 
-                return array( 'pending_fee' => array( 'order_id' => $child->get_id(), 'amount' => $delta_gross_sum, 'pairs' => $pair_lines ), 'pricing' => $pricing );
+                return array( 'pending_fee' => array( 'order_id' => $child->get_id(), 'amount' => $fee_amount, 'pairs' => $pair_lines ), 'pricing' => $pricing );
         }
 
         // Ellers: bruk erstatningene nå
