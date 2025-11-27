@@ -2148,7 +2148,7 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
         $changes = array(); $old_stock_mode = $opts['old_stock_mode'] ?? 'decrease'; $cap_enabled = ! empty( $opts['cap'] );
         $cap_total_at = array_key_exists( 'cap_total_at', $opts ) ? (float) wc_format_decimal( $opts['cap_total_at'], wc_get_price_decimals() ) : null;
         $fee_order_id = isset( $opts['fee_order_id'] ) ? (int) $opts['fee_order_id'] : 0;
-        $baseline_total = null !== $cap_total_at ? $cap_total_at : (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
+        $baseline_total = (float) wc_format_decimal( null !== $cap_total_at ? $cap_total_at : $order->get_total(), wc_get_price_decimals() );
         $discount_applied = false; $discount_amount = 0.0; $discount_label = '';
 
 	foreach ( (array) $payload['items'] as $it ) {
@@ -2261,38 +2261,65 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 
         $order->calculate_totals(); $order->save();
 
-        if ( null !== $cap_total_at ) {
-                $current_total = (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
-                $paid_on_other_order = 0.0;
-                if ( $fee_order_id ) {
-                        $fee_order = wc_get_order( $fee_order_id );
-                        if ( $fee_order ) {
-                                $paid_on_other_order = (float) wc_format_decimal( $fee_order->get_total(), wc_get_price_decimals() );
-                        }
+        $current_total = (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
+        $paid_on_other_order = 0.0;
+        if ( $fee_order_id ) {
+                $fee_order = wc_get_order( $fee_order_id );
+                if ( $fee_order ) {
+                        $paid_on_other_order = (float) wc_format_decimal( $fee_order->get_total(), wc_get_price_decimals() );
+                }
+        }
+
+        $over_original   = (float) wc_format_decimal( max( 0, $current_total - $baseline_total ), wc_get_price_decimals() );
+        $discount_amount = (float) wc_format_decimal( max( $over_original, $paid_on_other_order ), wc_get_price_decimals() );
+
+        if ( $discount_amount > 0 ) {
+                $discount_label = sprintf( __( 'Mellomlegg betalt på Ordre %s', 'lilleprinsen' ), $fee_order_id ? $fee_order_id : $order->get_order_number() );
+
+                foreach ( $order->get_items( 'fee' ) as $fee_item ) {
+                        if ( $discount_label === $fee_item->get_name() ) $order->remove_item( $fee_item->get_id() );
                 }
 
-                $over_original   = (float) wc_format_decimal( max( 0, $current_total - $baseline_total ), wc_get_price_decimals() );
-                $discount_amount = (float) wc_format_decimal( max( $over_original, $paid_on_other_order ), wc_get_price_decimals() );
+                $tax_lines = $order->get_taxes(); $tax_totals = array(); $tax_total_sum = 0.0;
+                foreach ( $tax_lines as $tax_line ) {
+                        $rate_id = (int) $tax_line->get_rate_id();
+                        $amount  = (float) $tax_line->get_tax_total() + (float) $tax_line->get_shipping_tax_total();
+                        if ( $rate_id && $amount !== 0.0 ) { $tax_totals[ $rate_id ] = $amount; $tax_total_sum += $amount; }
+                }
 
-                if ( $discount_amount > 0 ) {
-                        $discount_label = sprintf( __( 'Mellomlegg betalt på Ordre %s', 'lilleprinsen' ), $fee_order_id ? $fee_order_id : $order->get_order_number() );
+                $discount = new WC_Order_Item_Fee();
+                $discount->set_name( $discount_label );
 
-                        foreach ( $order->get_items( 'fee' ) as $fee_item ) {
-                                if ( $discount_label === $fee_item->get_name() ) $order->remove_item( $fee_item->get_id() );
+                if ( $tax_total_sum > 0 ) {
+                        $net_base = max( 0.0, (float) $order->get_total() - (float) $order->get_total_tax() );
+                        $tax_ratio = $net_base > 0 ? (float) $order->get_total_tax() / $net_base : 0.0;
+                        $discount_net  = $tax_ratio > 0 ? $discount_amount / ( 1 + $tax_ratio ) : $discount_amount;
+                        $discount_tax  = max( 0.0, $discount_amount - $discount_net );
+
+                        $discount->set_amount( -1 * $discount_net );
+                        $discount->set_total(  -1 * $discount_net );
+
+                        $alloc = array(); $left_tax = $discount_tax; $rate_ids = array_keys( $tax_totals );
+                        foreach ( $rate_ids as $idx => $rid ) {
+                                $share = $tax_total_sum > 0 ? (float) $tax_totals[ $rid ] / $tax_total_sum : 0.0;
+                                $portion = ( $idx === array_key_last( $rate_ids ) ) ? $left_tax : wc_round_tax_total( $discount_tax * $share );
+                                $alloc[ $rid ] = -1 * $portion;
+                                $left_tax -= $portion;
                         }
-
-                        $discount = new WC_Order_Item_Fee();
-                        $discount->set_name( $discount_label );
+                        $discount->set_taxes( array( 'total' => $alloc, 'subtotal' => $alloc ) );
+                        $discount->set_tax_status( 'taxable' );
+                } else {
                         $discount->set_amount( -1 * $discount_amount );
                         $discount->set_total(  -1 * $discount_amount );
                         $discount->set_tax_status( 'none' );
-                        $order->add_item( $discount );
-
-                        $order->calculate_totals();
-                        $order->save();
-
-                        $discount_applied = true;
                 }
+
+                $order->add_item( $discount );
+
+                $order->calculate_totals();
+                $order->save();
+
+                $discount_applied = true;
         }
 
         if ( function_exists( 'wc_delete_shop_order_transients' ) ) wc_delete_shop_order_transients( $order->get_id() );
@@ -2723,6 +2750,7 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 <?php if ( $cnt_customer_pays ) : ?>
 <p class="note-line"><?php echo esc_html__( 'Velger du en dyrere erstatning, dekker du mellomlegget. Vi ber deg bekrefte før vi endrer ordren.', 'lilleprinsen' ); ?></p>
 <?php endif; ?>
+<p class="note-line"><?php echo esc_html__( 'Totalsummen på den opprinnelige bestillingen øker ikke – eventuelle mellomlegg blir fakturert i en egen ordre.', 'lilleprinsen' ); ?></p>
 <p class="note-line"><?php echo esc_html__( 'Valgene dine blir lagret først når du godkjenner på siste steg.', 'lilleprinsen' ); ?></p>
 
 <div id="lp-mpr-status" class="status" aria-live="polite"></div>
