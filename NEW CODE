@@ -2143,7 +2143,14 @@ function lp_mpr_run_apply_job( $order_id ) {
 
                 if ( ! empty( $result['pending_fee'] ) ) {
                         $amount = (float) ( $result['pending_fee']['amount'] ?? 0.0 );
-                        $order->add_order_note( sprintf( __( 'MPR: Venter på tilleggsbetaling (%s). Varer er reservert inntil fristen.', 'lilleprinsen' ), wc_price( $amount, array( 'currency' => $order->get_currency() ) ) ), true );
+                        $pair_lines = array_values( array_filter( array_map( 'trim', (array) ( $result['pending_fee']['pairs'] ?? array() ) ) ) );
+                        $note_suffix = '';
+                        if ( ! empty( $pair_lines ) ) {
+                                $note_suffix = "\n" . implode( "\n", array_map( function( $line ) { return '• ' . $line; }, $pair_lines ) );
+                        }
+
+                        $order->add_order_note( sprintf( __( 'MPR: Venter på tilleggsbetaling (%s). Varer er reservert inntil fristen.', 'lilleprinsen' ), wc_price( $amount, array( 'currency' => $order->get_currency() ) ) ) . $note_suffix, true );
+                        lp_mpr_recalculate_order( $order );
                         $order->save();
                         return $result;
                 }
@@ -2157,10 +2164,12 @@ function lp_mpr_run_apply_job( $order_id ) {
 		if ( apply_filters( 'lp_mpr_delete_meta_on_success', true, $order, $payload ) ) $order->delete_meta_data( '_lp_missing_replacements' );
 		$order->delete_meta_data( '_lp_mpr_reservations' );
 
-		$order->update_status( 'oppdatert', __( 'Erstatninger er lagt inn (MPR).', 'lilleprinsen' ), true ); $order->save();
+                $order->update_status( 'oppdatert', __( 'Erstatninger er lagt inn (MPR).', 'lilleprinsen' ), true ); $order->save();
 
-		do_action( 'lp_mpr_after_apply', $order, $result );
-		lp_mpr_send_customer_confirmation( $order, $result );
+                do_action( 'lp_mpr_after_apply', $order, $result );
+                lp_mpr_send_customer_confirmation( $order, $result );
+                lp_mpr_recalculate_order( $order );
+                $order->save();
 
         } catch ( Throwable $e ) {
                 $order->add_order_note( sprintf( __( 'MPR feilet: %s', 'lilleprinsen' ), $e->getMessage() ), false );
@@ -2211,6 +2220,7 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
                 'delta_gross_sum'       => 0.0,
                 'order_total_before'    => (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() ),
         );
+        $pair_lines = lp_mpr_describe_old_new_pairs( $order, $payload );
 
         // Kun forslag merket "customer_pays" skaper tilleggsordre – og bare for positive deltas.
         foreach ( (array) $payload['items'] as $it ) {
@@ -2257,7 +2267,7 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
         // C: Totalsum lavere → bare bytt, ingen mellomlegg
         // D: Blandet (+1000/-500) → nettopositivt? betal; ellers bytt uten betaling
         if ( $delta_gross_sum > 0 && $pricing['estimated_order_delta'] > 0 ) {
-                $child = lp_mpr_create_extra_fee_order( $order, $payload, $delta_gross_sum, $delta_by_line );
+                $child = lp_mpr_create_extra_fee_order( $order, $payload, $delta_gross_sum, $delta_by_line, $pair_lines );
                 $order->update_meta_data( '_lp_mpr_child_fee_order_id', $child->get_id() ); $order->save();
                 lp_mpr_email_extra_fee_invoice( $order, $child, $delta_gross_sum );
                 $pricing['order_total_after']      = (float) wc_format_decimal( $pricing['order_total_before'] + $delta_gross_sum, wc_get_price_decimals() );
@@ -2267,8 +2277,9 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
                 $pricing['order_total_delta_html'] = wp_kses_post( wc_price( abs( $delta_gross_sum ), array( 'currency' => $order->get_currency() ) ) );
                 $pricing['order_total_html']       = $pricing['order_total_after_html'];
                 $pricing['delta_payer']            = 'customer';
+                if ( ! empty( $pair_lines ) ) $pricing['old_new_pairs'] = $pair_lines;
 
-                return array( 'pending_fee' => array( 'order_id' => $child->get_id(), 'amount' => $delta_gross_sum ), 'pricing' => $pricing );
+                return array( 'pending_fee' => array( 'order_id' => $child->get_id(), 'amount' => $delta_gross_sum, 'pairs' => $pair_lines ), 'pricing' => $pricing );
         }
 
         // Ellers: bruk erstatningene nå
@@ -2344,6 +2355,45 @@ function lp_mpr_describe_delta_reasons( WC_Order $order, array $delta_by_line ) 
         }
 
         return implode( ', ', $parts );
+}
+
+function lp_mpr_describe_old_new_pairs( WC_Order $order, array $payload ) : array {
+        $pairs = array();
+        foreach ( (array) $payload['items'] as $it ) {
+                $item_id = absint( $it['order_item_id'] ?? 0 );
+                if ( ! $item_id || empty( $it['replacements'] ) ) continue;
+
+                $old_item = $order->get_item( $item_id );
+                if ( ! $old_item || 'line_item' !== $old_item->get_type() ) continue;
+
+                $old_name = wp_strip_all_tags( $old_item->get_name() );
+
+                foreach ( (array) $it['replacements'] as $rep ) {
+                        $qty = max( 0, (int) ( $rep['qty'] ?? 0 ) );
+                        if ( $qty <= 0 ) continue;
+
+                        $mode = (string) ( $rep['mode'] ?? 'customer_pays' );
+                        if ( 'customer_pays' !== $mode ) continue;
+
+                        $pid = absint( $rep['product_id'] ?? 0 );
+                        $new_label = '';
+
+                        if ( $pid ) {
+                                $p = wc_get_product( $pid );
+                                if ( $p ) $new_label = wp_strip_all_tags( $p->get_formatted_name() );
+                        }
+
+                        if ( '' === $new_label && $pid ) {
+                                $new_label = sprintf( __( 'Produkt #%d', 'lilleprinsen' ), $pid );
+                        }
+
+                        if ( '' === $new_label ) continue;
+
+                        $pairs[] = sprintf( __( '%1$s → %2$s × %3$d', 'lilleprinsen' ), $old_name, $new_label, $qty );
+                }
+        }
+
+        return array_values( array_unique( array_filter( array_map( 'trim', $pairs ) ) ) );
 }
 
 function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : array {
@@ -2476,6 +2526,14 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
                                 $fee_delta_map = (array) $fee_order->get_meta( '_lp_mpr_delta_breakdown', true );
                                 $fee_reason    = lp_mpr_describe_delta_reasons( $order, $fee_delta_map );
                         }
+
+                        $fee_pairs = array_values( array_filter( array_map( 'trim', (array) $fee_order->get_meta( '_lp_mpr_old_new_pairs', true ) ) ) );
+                        if ( ! empty( $fee_pairs ) ) {
+                                $pairs_text = implode( '; ', $fee_pairs );
+                                $fee_reason = $fee_reason
+                                        ? sprintf( __( '%1$s — %2$s', 'lilleprinsen' ), $fee_reason, $pairs_text )
+                                        : $pairs_text;
+                        }
                 }
         }
 
@@ -2574,35 +2632,50 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 }
 
 /** Tilleggsordre (avgiftsfri fee på brutto mellomlegg) */
-function lp_mpr_create_extra_fee_order( WC_Order $parent, array $payload, float $amount_gross, array $delta_by_line ) : WC_Order {
-	$args  = array( 'customer_id' => $parent->get_user_id() ? (int) $parent->get_user_id() : 0 );
-	$child = wc_create_order( $args );
-	$child->update_meta_data( '_lp_mpr_parent_order_id', $parent->get_id() );
-	$child->update_meta_data( '_lp_mpr_hash',            lp_mpr_selection_hash( $payload ) );
-	$child->update_meta_data( '_lp_mpr_delta_breakdown', $delta_by_line );
-	$child->set_address( $parent->get_address( 'billing' ), 'billing' );
-	$child->set_address( $parent->get_address( 'shipping' ), 'shipping' );
+function lp_mpr_create_extra_fee_order( WC_Order $parent, array $payload, float $amount_gross, array $delta_by_line, array $pair_lines = array() ) : WC_Order {
+        $args  = array( 'customer_id' => $parent->get_user_id() ? (int) $parent->get_user_id() : 0 );
+        $child = wc_create_order( $args );
+        $child->update_meta_data( '_lp_mpr_parent_order_id', $parent->get_id() );
+        $child->update_meta_data( '_lp_mpr_hash',            lp_mpr_selection_hash( $payload ) );
+        $child->update_meta_data( '_lp_mpr_delta_breakdown', $delta_by_line );
+        $child->set_address( $parent->get_address( 'billing' ), 'billing' );
+        $child->set_address( $parent->get_address( 'shipping' ), 'shipping' );
 
         $fee = new WC_Order_Item_Fee();
-        $fee_label = __( 'Tilleggsbetaling for erstatningsvarer', 'lilleprinsen' );
+        $label_parts = array( __( 'Tilleggsbetaling for erstatningsvarer', 'lilleprinsen' ) );
         $fee_reason = lp_mpr_describe_delta_reasons( $parent, $delta_by_line );
         if ( $fee_reason ) {
-                $fee_label = sprintf( __( '%1$s — %2$s', 'lilleprinsen' ), $fee_label, $fee_reason );
+                $label_parts[] = $fee_reason;
                 $fee->update_meta_data( '_lp_mpr_fee_reason', $fee_reason );
         }
+        if ( ! empty( $pair_lines ) ) {
+                $clean_pairs = array_values( array_filter( array_map( 'trim', $pair_lines ) ) );
+                if ( ! empty( $clean_pairs ) ) {
+                        $child->update_meta_data( '_lp_mpr_old_new_pairs', $clean_pairs );
+                        $label_parts[] = implode( '; ', $clean_pairs );
+                }
+        }
+
+        $fee_label = implode( ' — ', array_filter( $label_parts ) );
         $fee->set_name( $fee_label );
         $fee->set_amount( $amount_gross );
         $fee->set_total(  $amount_gross );
         $fee->set_tax_status( 'none' );
 	$child->add_item( $fee );
 
-	$child->set_currency( $parent->get_currency() );
+        $child->set_currency( $parent->get_currency() );
         lp_mpr_recalculate_order( $child );
-	$child->update_status( 'pending', __( 'Ventende tilleggsbetaling (MPR).', 'lilleprinsen' ), true );
-	$child->save();
+        $child->update_status( 'pending', __( 'Ventende tilleggsbetaling (MPR).', 'lilleprinsen' ), true );
+        $child->save();
 
-	$parent->add_order_note( sprintf( __( 'MPR: Laget tilleggsordre #%s på %.2f.', 'lilleprinsen' ), $child->get_order_number(), $amount_gross ), false );
-	return $child;
+        $pair_note = '';
+        $pair_note_lines = array_values( array_filter( array_map( 'trim', $pair_lines ) ) );
+        if ( ! empty( $pair_note_lines ) ) {
+                $pair_note = "\n" . implode( "\n", array_map( function( $line ) { return '• ' . $line; }, $pair_note_lines ) );
+        }
+
+        $parent->add_order_note( sprintf( __( 'MPR: Laget tilleggsordre #%s på %.2f.', 'lilleprinsen' ), $child->get_order_number(), $amount_gross ) . $pair_note, false );
+        return $child;
 }
 
 function lp_mpr_email_extra_fee_invoice( WC_Order $parent, WC_Order $child, float $amount_gross ) : void {
