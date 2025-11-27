@@ -2367,7 +2367,13 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
         }
 
         $intermediate    = (float) wc_format_decimal( max( 0, $current_total - $baseline_total ), wc_get_price_decimals() );
+
+        // Prioritér beløpet kunden faktisk har betalt i tilleggsordre når det finnes,
+        // slik at vi matcher mellomlegget selv om beregnet delta endrer seg underveis.
         $discount_amount = $intermediate;
+        if ( $paid_on_other_order > 0 ) {
+                $discount_amount = (float) wc_format_decimal( $paid_on_other_order, wc_get_price_decimals() );
+        }
 
         if ( $discount_amount > 0 ) {
                 $discount_label = sprintf( __( 'Mellomlegg betalt på Ordre %s', 'lilleprinsen' ), $fee_order_id ? $fee_order_id : $order->get_order_number() );
