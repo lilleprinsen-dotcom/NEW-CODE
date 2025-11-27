@@ -27,11 +27,36 @@ add_action( 'init', function(){
  * ========================================================== */
 if ( ! defined( 'LP_MPR_JOB_ACTION' ) )           define( 'LP_MPR_JOB_ACTION',          'lp_mpr_apply_replacements' );
 if ( ! defined( 'LP_MPR_RELEASE_JOB_ACTION' ) )   define( 'LP_MPR_RELEASE_JOB_ACTION',  'lp_mpr_release_reservations' );
+if ( ! defined( 'LP_MPR_REMINDER_JOB_ACTION' ) )  define( 'LP_MPR_REMINDER_JOB_ACTION', 'lp_mpr_send_missing_reminder' );
 if ( ! defined( 'LP_MPR_JOB_GROUP' ) )            define( 'LP_MPR_JOB_GROUP',           'lp-mpr' );
 
 /** Debounce/TTL kan justeres via filter */
 function lp_mpr_debounce_seconds() : int { return (int) apply_filters( 'lp_mpr_debounce_seconds', 120 ); }
 function lp_mpr_reservation_ttl_seconds() : int { return (int) apply_filters( 'lp_mpr_reservation_ttl_seconds', 2 * HOUR_IN_SECONDS ); }
+function lp_mpr_get_reminder_intervals() : array {
+        $raw = get_option( 'lp_mpr_reminder_intervals', array( 24 ) ); // lagres i timer
+        if ( ! is_array( $raw ) ) $raw = array();
+        $clean = array();
+        foreach ( $raw as $hrs ) {
+                $hrs = (int) $hrs;
+                if ( $hrs > 0 ) $clean[] = $hrs;
+        }
+        $clean = array_values( array_unique( $clean ) );
+        sort( $clean );
+        return $clean;
+}
+function lp_mpr_parse_reminder_intervals_from_input( $input ) : array {
+        if ( is_array( $input ) ) $input = implode( ',', $input );
+        $parts = array_map( 'trim', explode( ',', (string) $input ) );
+        $out   = array();
+        foreach ( $parts as $p ) {
+                if ( $p === '' ) continue;
+                $hrs = (int) $p;
+                if ( $hrs > 0 ) $out[] = $hrs;
+        }
+        $out = array_values( array_unique( $out ) ); sort( $out );
+        return $out;
+}
 
 /** Lagerpolicy for gammel vare: rør ikke lager som standard; opt-in for å tvinge 0. */
 function lp_mpr_force_old_stock_zero() : bool { return (bool) apply_filters( 'lp_mpr_force_old_stock_zero', false ); }
@@ -188,6 +213,123 @@ function lp_mpr_apply_discount_to_delta( float $delta, array $discount_ctx ) : f
         if ( $delta <= 0 || $percent <= 0 ) return (float) wc_format_decimal( $delta, wc_get_price_decimals() );
         $factor = max( 0.0, min( 1.0, ( 100.0 - $percent ) / 100.0 ) );
         return (float) wc_format_decimal( $delta * $factor, wc_get_price_decimals() );
+}
+
+/* ==========================================================
+ *                       LOGGING & E-POST
+ * ========================================================== */
+
+function lp_mpr_append_log_entry( WC_Order $order, string $message, string $status = '', string $actor = 'system', array $meta = array(), bool $save = true ) : void {
+        $entries = (array) $order->get_meta( '_lp_mpr_log', true );
+        $entries[] = array(
+                'at'      => time(),
+                'message' => $message,
+                'status'  => $status,
+                'actor'   => $actor,
+                'meta'    => $meta,
+        );
+        if ( count( $entries ) > 200 ) $entries = array_slice( $entries, -200 );
+        $order->update_meta_data( '_lp_mpr_log', $entries );
+        if ( $save ) $order->save();
+}
+function lp_mpr_get_log_entries( WC_Order $order ) : array { return (array) $order->get_meta( '_lp_mpr_log', true ); }
+function lp_mpr_log_status_label( string $status ) : string {
+        $map = array(
+                'alternativer_sendt'          => __( 'Alternativer sendt', 'lilleprinsen' ),
+                'kunde_godkjent'              => __( 'Kunde godkjente', 'lilleprinsen' ),
+                'kunde_godkjent_venter'       => __( 'Kunde godkjent – venter betaling', 'lilleprinsen' ),
+                'sletting_valgt'              => __( 'Kunde ønsker sletting', 'lilleprinsen' ),
+                'betaling_feilet'             => __( 'Betaling feilet', 'lilleprinsen' ),
+                'reservasjon_frigitt'         => __( 'Reservasjon frigitt', 'lilleprinsen' ),
+                'chat'                        => __( 'Chat', 'lilleprinsen' ),
+                'epost'                       => __( 'E-post', 'lilleprinsen' ),
+                'oppdatert'                   => __( 'Ordre oppdatert', 'lilleprinsen' ),
+                'påminnelse'                  => __( 'Påminnelse', 'lilleprinsen' ),
+        );
+        return $map[ $status ] ?? $status;
+}
+
+function lp_mpr_render_branded_email( string $heading, string $body_html, array $cta = array() ) : string {
+        $button = '';
+        if ( ! empty( $cta['label'] ) && ! empty( $cta['url'] ) ) {
+                $button = '<p style="margin:24px 0 10px;"><a href="' . esc_url( $cta['url'] ) . '" style="background:#0ea5e9;color:#fff;padding:12px 18px;border-radius:10px;font-weight:700;text-decoration:none;display:inline-block;">' . wp_kses_post( $cta['label'] ) . '</a></p>';
+        }
+
+        return '<div style="background:#f8fafc;padding:28px 0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;">'
+             . '<div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:24px;box-shadow:0 10px 30px rgba(15,23,42,.05);">'
+             . '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;"><span style="font-size:24px;">🧸</span><div style="font-weight:700;font-size:18px;">Lilleprinsen</div></div>'
+             . '<h1 style="margin:0 0 12px;font-size:20px;">' . wp_kses_post( $heading ) . '</h1>'
+             . '<div style="font-size:15px;line-height:1.6;">' . $body_html . '</div>'
+             . $button
+             . '<p style="margin-top:22px;font-size:13px;color:#475569;">' . esc_html__( 'Takk for at du handler hos oss! Ta kontakt om du lurer på noe.', 'lilleprinsen' ) . '</p>'
+             . '</div></div>';
+}
+
+function lp_mpr_send_branded_email( string $to, string $subject, string $heading, string $body_html, array $cta = array(), WC_Order $order = null, string $log_status = 'epost', string $actor = 'system' ) : void {
+        if ( ! $to ) return;
+        $html = lp_mpr_render_branded_email( $heading, $body_html, $cta );
+        wc_mail( $to, $subject, $html, array( 'Content-Type: text/html; charset=UTF-8' ) );
+        if ( $order ) {
+                lp_mpr_append_log_entry( $order, wp_strip_all_tags( $subject ), $log_status, $actor );
+        }
+}
+
+function lp_mpr_schedule_reminders( WC_Order $order, int $issue_ver ) : void {
+        $intervals = lp_mpr_get_reminder_intervals();
+        if ( empty( $intervals ) ) return;
+
+        if ( function_exists( 'as_unschedule_all_actions' ) ) {
+                as_unschedule_all_actions( LP_MPR_REMINDER_JOB_ACTION, array( $order->get_id() ), LP_MPR_JOB_GROUP );
+        } else {
+                wp_clear_scheduled_hook( LP_MPR_REMINDER_JOB_ACTION, array( $order->get_id(), $issue_ver ) );
+        }
+
+        foreach ( $intervals as $hrs ) {
+                $ts = time() + ( (int) $hrs * HOUR_IN_SECONDS );
+                if ( function_exists( 'as_schedule_single_action' ) ) {
+                        as_schedule_single_action( $ts, LP_MPR_REMINDER_JOB_ACTION, array( $order->get_id(), $issue_ver ), LP_MPR_JOB_GROUP, true );
+                } else {
+                        wp_schedule_single_event( $ts, LP_MPR_REMINDER_JOB_ACTION, array( $order->get_id(), $issue_ver ) );
+                }
+        }
+}
+
+function lp_mpr_send_missing_reminder( $order_id, $issue_ver = 0 ) {
+        $order = wc_get_order( $order_id ); if ( ! $order ) return;
+        $issue = (array) $order->get_meta( '_lp_mpr_issue', true );
+        $current_ver = (int) ( $issue['ver'] ?? 0 );
+        if ( $issue_ver && $current_ver && $issue_ver !== $current_ver ) return;
+        if ( ! empty( $issue['consumed'] ) ) return;
+
+        $url   = apply_filters( 'lp_mpr_portal_url', '', $order_id );
+        $lines = array();
+        $saved = (array) $order->get_meta( '_lp_missing_replacements', true );
+        foreach ( $saved as $row ) {
+                $missing = max( 0, (int) ( $row['qty'] ?? 0 ) );
+                if ( $missing > 0 ) $lines[] = sprintf( _n( '%d vare mangler', '%d varer mangler', $missing, 'lilleprinsen' ), $missing );
+        }
+
+        $body  = '<p>' . esc_html__( 'Vi savner svaret ditt på erstatningene vi har foreslått.', 'lilleprinsen' ) . '</p>';
+        if ( ! empty( $lines ) ) {
+                $body .= '<p>' . esc_html__( 'Dette mangler fortsatt:', 'lilleprinsen' ) . '</p>';
+                $body .= '<ul style="padding-left:20px;line-height:1.5;">';
+                foreach ( array_slice( $lines, 0, 5 ) as $l ) {
+                        $body .= '<li>' . esc_html( $l ) . '</li>';
+                }
+                $body .= '</ul>';
+        }
+        $body .= '<p>' . esc_html__( 'Trykk på knappen under for å bekrefte eller justere valgene dine.', 'lilleprinsen' ) . '</p>';
+
+        lp_mpr_send_branded_email(
+                $order->get_billing_email(),
+                __( 'Påminnelse: velg erstatningene dine', 'lilleprinsen' ),
+                __( 'Kan du bekrefte erstatningene?', 'lilleprinsen' ),
+                $body,
+                array( 'label' => __( 'Åpne erstatningsportalen', 'lilleprinsen' ), 'url' => $url ),
+                $order,
+                'påminnelse'
+        );
+        lp_mpr_append_log_entry( $order, __( 'Påminnelse sendt til kunden om manglende valg.', 'lilleprinsen' ), 'påminnelse', 'system' );
 }
 
 /** Kundevennlig oppsummering etter oppdatering */
@@ -577,13 +719,14 @@ function lp_mpr_reply_chat() {
 
         if ( '' !== $message ) {
                 $order->add_order_note( sprintf( __( 'MPR chat: Admin svarte: %s', 'lilleprinsen' ), $message ), false );
+                lp_mpr_append_log_entry( $order, sprintf( __( 'Admin svarte: %s', 'lilleprinsen' ), $message ), 'chat', 'admin' );
                 $email = $order->get_billing_email();
                 if ( $email ) {
                         $subject = sprintf( __( 'Svar på chat om ordre #%s', 'lilleprinsen' ), $order->get_order_number() );
                         $body  = '<p>' . sprintf( esc_html__( 'Hei! Her er oppdatert chat for ordre #%s.', 'lilleprinsen' ), esc_html( $order->get_order_number() ) ) . '</p>';
                         $body .= '<p><strong>' . esc_html__( 'Forslag sendt', 'lilleprinsen' ) . ':</strong> ' . esc_html( $chat['suggestions'] ?? '' ) . '</p>';
-                        $body .= '<h3>' . esc_html__( 'Samtale', 'lilleprinsen' ) . '</h3>' . lp_mpr_format_chat_transcript_html( $chat );
-                        wc_mail( $email, $subject, $body, array( 'Content-Type: text/html; charset=UTF-8' ) );
+                        $body .= '<h3 style="margin-top:18px;">' . esc_html__( 'Samtale', 'lilleprinsen' ) . '</h3>' . lp_mpr_format_chat_transcript_html( $chat );
+                        lp_mpr_send_branded_email( $email, $subject, __( 'Vi har svart på chatten din', 'lilleprinsen' ), $body, array(), $order, 'chat', 'admin' );
                 }
         } elseif ( $status ) {
                 $statuses = lp_mpr_chat_status_options();
@@ -595,6 +738,21 @@ function lp_mpr_reply_chat() {
         exit;
 }
 
+add_action( 'admin_post_lp_mpr_save_settings', function () {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+                wp_die( esc_html__( 'Du har ikke tilgang til dette.', 'lilleprinsen' ) );
+        }
+        if ( empty( $_POST['lp_mpr_save_settings_nonce'] ) || ! wp_verify_nonce( $_POST['lp_mpr_save_settings_nonce'], 'lp_mpr_save_settings' ) ) {
+                wp_die( esc_html__( 'Sikkerhetssjekk feilet.', 'lilleprinsen' ) );
+        }
+
+        $intervals = lp_mpr_parse_reminder_intervals_from_input( isset( $_POST['lp_mpr_reminder_intervals'] ) ? wp_unslash( $_POST['lp_mpr_reminder_intervals'] ) : '' );
+        update_option( 'lp_mpr_reminder_intervals', $intervals );
+
+        wp_safe_redirect( add_query_arg( 'lp_mpr_saved', '1', admin_url( 'admin.php?page=lp-mpr-settings' ) ) );
+        exit;
+} );
+
 function lp_mpr_render_settings_page() {
         if ( ! current_user_can( 'manage_woocommerce' ) ) return;
 
@@ -602,10 +760,16 @@ function lp_mpr_render_settings_page() {
         $debounce    = lp_mpr_debounce_seconds();
         $chats       = lp_mpr_collect_all_chats();
         $statuses    = lp_mpr_chat_status_options();
+        $reminders   = lp_mpr_get_reminder_intervals();
+        $reminder_str= implode( ', ', $reminders );
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__( 'Erstatninger for manglende varer', 'lilleprinsen' ) . '</h1>';
         echo '<p>' . esc_html__( 'Her finner du portalstatus, tidsgrenser og snarveier for å følge opp kundene.', 'lilleprinsen' ) . '</p>';
+
+        if ( isset( $_GET['lp_mpr_saved'] ) ) {
+                echo '<div class="notice notice-success"><p>' . esc_html__( 'Innstillingene ble lagret.', 'lilleprinsen' ) . '</p></div>';
+        }
 
         echo '<h2>' . esc_html__( 'Portal og kommunikasjon', 'lilleprinsen' ) . '</h2>';
         echo '<ul>';
@@ -621,6 +785,17 @@ function lp_mpr_render_settings_page() {
         echo '<a class="button button-primary" href="' . esc_url( admin_url( 'edit.php?post_type=shop_order' ) ) . '">' . esc_html__( 'Gå til ordreoversikt', 'lilleprinsen' ) . '</a> ';
         echo '<a class="button" href="' . esc_url( admin_url( 'admin.php?page=wc-settings' ) ) . '">' . esc_html__( 'Åpne WooCommerce-innstillinger', 'lilleprinsen' ) . '</a>';
         echo '</p>';
+
+        echo '<h2>' . esc_html__( 'Påminnelser til kunder', 'lilleprinsen' ) . '</h2>';
+        echo '<p>' . esc_html__( 'Velg hvor ofte vi skal minne kunder på å fullføre valgene sine når de ikke har svart.', 'lilleprinsen' ) . '</p>';
+        echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="lp-reminder-form">';
+        echo '<p><label for="lp_mpr_reminder_intervals" style="font-weight:600;">' . esc_html__( 'Send påminnelse etter (timer)', 'lilleprinsen' ) . '</label><br>';
+        echo '<input type="text" id="lp_mpr_reminder_intervals" name="lp_mpr_reminder_intervals" value="' . esc_attr( $reminder_str ) . '" class="regular-text" placeholder="24, 48, 72"> ';
+        echo '<span class="description">' . esc_html__( 'Skriv inn tall separert med komma, f.eks. 12, 24, 48.', 'lilleprinsen' ) . '</span></p>';
+        echo '<p><button type="submit" class="button button-primary">' . esc_html__( 'Lagre påminnelser', 'lilleprinsen' ) . '</button></p>';
+        wp_nonce_field( 'lp_mpr_save_settings', 'lp_mpr_save_settings_nonce' );
+        echo '<input type="hidden" name="action" value="lp_mpr_save_settings">';
+        echo '</form>';
 
         echo '<h2 id="lp-mpr-chats">' . esc_html__( 'Kundesamtaler', 'lilleprinsen' ) . '</h2>';
         echo '<p>' . esc_html__( 'Kunder kan sende en chat fra portalen hvis forslagene ikke passer. Svarene du skriver her sendes til kundens e-post sammen med hele historikken.', 'lilleprinsen' ) . '</p>';
@@ -724,6 +899,14 @@ echo '<style>
 #lp-mpr .select2-container{min-width:320px}
 #lp-mpr .delta-badge{font-size:11px;padding:2px 6px;border-radius:999px;background:#eef2ff;color:#1d4ed8;margin-left:6px;white-space:nowrap}
 #lp-mpr .mode{font-size:12px;color:#334155}
+#lp-mpr .lp-log{margin-top:14px;padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.06)}
+#lp-mpr .lp-log h3{margin:0 0 6px;font-size:14px;font-weight:700;color:#0f172a}
+#lp-mpr .lp-log-entry{display:flex;gap:10px;padding:6px 0;border-bottom:1px solid #e2e8f0}
+#lp-mpr .lp-log-entry:last-child{border-bottom:0}
+#lp-mpr .lp-log-status{font-size:11px;background:#eef2ff;color:#1d4ed8;border-radius:999px;padding:2px 8px;flex:0 0 auto;white-space:nowrap}
+#lp-mpr .lp-log-message{flex:1;min-width:0;font-size:13px;color:#0f172a}
+#lp-mpr .lp-log-meta{font-size:12px;color:#475569;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#lp-mpr .lp-log-actor{color:#475569;font-size:12px}
 </style>';
 
 	echo '<div id="lp-mpr" role="group" aria-label="' . esc_attr__( 'Erstatninger for manglende varer', 'lilleprinsen' ) . '">';
@@ -837,12 +1020,38 @@ foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
 	echo '<div class="lp-actions">';
 	echo '<p style="margin:0 0 6px;"><label for="lp_mpr_message" style="font-weight:600;">' . esc_html__( 'Send forslag til kunden', 'lilleprinsen' ) . '</label><br>';
 	echo '<textarea id="lp_mpr_message" name="lp_mpr_message" rows="3" placeholder="' . esc_attr__( 'Valgfri melding …', 'lilleprinsen' ) . '"></textarea></p>';
-	echo '<p style="margin:6px 0 0;"><button type="button" class="button button-primary" id="lp-mpr-send-btn" disabled>' . esc_html__( 'Send forslag', 'lilleprinsen' ) . '</button> ';
-	echo '<span class="description">' . esc_html__( 'Sender en lenke til egen portal via kunde-notat e-post.', 'lilleprinsen' ) . '</span></p>';
-	echo '</div>';
+        echo '<p style="margin:6px 0 0;"><button type="button" class="button button-primary" id="lp-mpr-send-btn" disabled>' . esc_html__( 'Send forslag', 'lilleprinsen' ) . '</button> ';
+        echo '<span class="description">' . esc_html__( 'Sender en lenke til egen portal via kunde-notat e-post.', 'lilleprinsen' ) . '</span></p>';
+        echo '</div>';
 
-	echo '</div>'; // #lp-mpr
-	?>
+        $logs = array_reverse( lp_mpr_get_log_entries( $order ) );
+        echo '<div class="lp-log">';
+        echo '<h3>' . esc_html__( 'Logg og status', 'lilleprinsen' ) . '</h3>';
+        echo '<p class="lp-log-meta" style="margin:0 0 6px;">' . esc_html__( 'Viser handlinger fra admin, kunden og systemet – inkludert e-poster og reserveringer.', 'lilleprinsen' ) . '</p>';
+        if ( empty( $logs ) ) {
+                echo '<p class="description" style="margin:6px 0 0;">' . esc_html__( 'Ingen loggført aktivitet ennå.', 'lilleprinsen' ) . '</p>';
+        } else {
+                foreach ( $logs as $entry ) {
+                        $when   = ! empty( $entry['at'] ) ? date_i18n( 'Y-m-d H:i', (int) $entry['at'] ) : '';
+                        $status = ! empty( $entry['status'] ) ? lp_mpr_log_status_label( (string) $entry['status'] ) : '';
+                        $actor_key = (string) ( $entry['actor'] ?? 'system' );
+                        $actor = $actor_key === 'customer' ? __( 'Kunde', 'lilleprinsen' ) : ( ( $actor_key === 'admin' ) ? __( 'Admin', 'lilleprinsen' ) : __( 'System', 'lilleprinsen' ) );
+                        $message = isset( $entry['message'] ) ? (string) $entry['message'] : '';
+
+                        echo '<div class="lp-log-entry">';
+                        if ( $status ) echo '<span class="lp-log-status">' . esc_html( $status ) . '</span>';
+                        echo '<div class="lp-log-message">' . esc_html( $message ) . '</div>';
+                        echo '<div class="lp-log-meta">';
+                        if ( $when ) echo '<span>' . esc_html( $when ) . '</span>';
+                        echo '<span class="lp-log-actor">' . esc_html( $actor ) . '</span>';
+                        echo '</div>';
+                        echo '</div>';
+                }
+        }
+        echo '</div>';
+
+        echo '</div>'; // #lp-mpr
+        ?>
 	<script>
 	jQuery(function($){
 		const previewNonce = '<?php echo esc_js( wp_create_nonce( 'lp_mpr_preview_delta' ) ); ?>';
@@ -1167,9 +1376,11 @@ function lp_mpr_send_suggestion() {
                 $order->set_status( 'feedback', __( 'Forslag sendt til kunde for tilbakemelding.', 'lilleprinsen' ) );
         }
         $order->save();
+        lp_mpr_append_log_entry( $order, __( 'Alternativer sendt til kunden.', 'lilleprinsen' ), 'alternativer_sendt', 'admin', array( 'url' => $url ) );
+        lp_mpr_schedule_reminders( $order, $ver );
 
-	// Throttle
-	$throttle_key = 'lp_mpr_sent_' . $order_id;
+        // Throttle
+        $throttle_key = 'lp_mpr_sent_' . $order_id;
 	if ( get_transient( $throttle_key ) ) {
 		wp_send_json_error( array( 'message' => __( 'Forslag ble nettopp sendt. Vent et lite øyeblikk før du sender igjen.', 'lilleprinsen' ) ) );
 	}
@@ -1180,7 +1391,7 @@ function lp_mpr_send_suggestion() {
 
 	// Kunde-notat
 	$extra = isset( $_POST['lp_mpr_message'] ) ? wp_kses_post( wp_unslash( $_POST['lp_mpr_message'] ) ) : '';
-	$note  = $extra ? $extra . "\n\n" : '';
+        $note  = $extra ? $extra . "\n\n" : '';
         $note .= sprintf( __( 'Vi har foreslått alternativer for varer vi mangler. Åpne portalen her: %s', 'lilleprinsen' ), esc_url( $url ) );
         if ( $discount_ctx['percent'] > 0 && ! empty( $discount_ctx['codes'] ) ) {
                 $note .= "\n\n" . sprintf(
@@ -1188,7 +1399,7 @@ function lp_mpr_send_suggestion() {
                         implode( ', ', array_map( 'esc_html', $discount_ctx['codes'] ) )
                 );
         }
-        $order->add_order_note( $note, true );
+        $order->add_order_note( $note, false );
 
         do_action( 'lp_mpr_suggestion_emailed', $order, $url, $clean );
 
@@ -1240,6 +1451,26 @@ add_action( 'lp_mpr_suggestion_emailed', function( WC_Order $order, string $url,
                         $lines[] = $intro . ' ' . implode( '; ', $suggestion_lines );
                 }
         }
+
+        $body  = '<p>' . esc_html__( 'Vi har forslag klare for deg – bekreft hvilke erstatninger du ønsker.', 'lilleprinsen' ) . '</p>';
+        if ( ! empty( $lines ) ) {
+                $body .= '<ul style="padding-left:20px;line-height:1.5;">';
+                foreach ( $lines as $line ) {
+                        $body .= '<li>' . esc_html( $line ) . '</li>';
+                }
+                $body .= '</ul>';
+        }
+        $body .= '<p>' . esc_html__( 'Klikk på knappen under for å åpne erstatningsportalen.', 'lilleprinsen' ) . '</p>';
+
+        lp_mpr_send_branded_email(
+                $order->get_billing_email(),
+                __( 'Velg erstatningene dine', 'lilleprinsen' ),
+                __( 'Vi har forslag til deg', 'lilleprinsen' ),
+                $body,
+                array( 'label' => __( 'Åpne portalen', 'lilleprinsen' ), 'url' => $url ),
+                $order,
+                'alternativer_sendt'
+        );
 
         if ( ! empty( $lines ) ) {
                 $note  = __( 'MPR: Forslag sendt til kunde.', 'lilleprinsen' );
@@ -1337,6 +1568,7 @@ function lp_mpr_portal_action() {
 
                 $chat = lp_mpr_create_customer_chat( $order, $msg, $cur_ver );
                 $order->add_order_note( sprintf( __( 'MPR portal: Kunde åpnet chat: %s', 'lilleprinsen' ), $msg ), false );
+                lp_mpr_append_log_entry( $order, sprintf( __( 'Kunde åpnet chat: %s', 'lilleprinsen' ), $msg ), 'chat', 'customer' );
 
                 $admin_email = apply_filters( 'lp_mpr_chat_notification_email', 'kundeservice@lilleprinsen.no', $order );
                 if ( $admin_email ) {
@@ -1480,6 +1712,13 @@ function lp_mpr_portal_action() {
                         wp_send_json_error( array( 'message' => __( 'Kunne ikke oppdatere ordren akkurat nå.', 'lilleprinsen' ) ) );
                 }
 
+                if ( ! empty( $result['pending_fee'] ) ) {
+                        $amount = (float) ( $result['pending_fee']['amount'] ?? 0.0 );
+                        lp_mpr_append_log_entry( $order, sprintf( __( 'Kunde godkjente alternativer med mellomlegg på %s.', 'lilleprinsen' ), wc_price( $amount, array( 'currency' => $order->get_currency() ) ) ), 'kunde_godkjent_venter', 'customer' );
+                } else {
+                        lp_mpr_append_log_entry( $order, __( 'Kunde godkjente og ordren er oppdatert.', 'lilleprinsen' ), 'kunde_godkjent', 'customer' );
+                }
+
                 $redirect = add_query_arg( 'lp_mpr_done', '1', lp_mpr_build_portal_url( $order, $cur_ver ) );
                 $pricing = (array) ( $result['pricing'] ?? array() );
                 $order_total_html = $pricing['order_total_html'] ?? wp_kses_post( wc_price( $order->get_total(), array( 'currency' => $order->get_currency() ) ) );
@@ -1547,6 +1786,8 @@ function lp_mpr_portal_action() {
                 } catch ( Throwable $e ) {
                         wp_send_json_error( array( 'message' => __( 'Kunne ikke oppdatere ordren akkurat nå.', 'lilleprinsen' ) ) );
                 }
+
+                lp_mpr_append_log_entry( $order, __( 'Kunde ba om sletting av manglende varer.', 'lilleprinsen' ), 'sletting_valgt', 'customer' );
 
                 $redirect = add_query_arg( 'lp_mpr_done', '1', lp_mpr_build_portal_url( $order, $cur_ver ) );
                 wp_send_json_success( array( 'ok' => true, 'redirect' => esc_url_raw( $redirect ) ) );
@@ -1765,8 +2006,9 @@ function lp_mpr_run_apply_job( $order_id ) {
         return $result;
 }
 add_action( 'plugins_loaded', function () {
-	add_action( LP_MPR_JOB_ACTION,         'lp_mpr_run_apply_job',       10, 1 );
-	add_action( LP_MPR_RELEASE_JOB_ACTION, 'lp_mpr_release_reservations',10, 2 );
+        add_action( LP_MPR_JOB_ACTION,         'lp_mpr_run_apply_job',       10, 1 );
+        add_action( LP_MPR_RELEASE_JOB_ACTION, 'lp_mpr_release_reservations',10, 2 );
+        add_action( LP_MPR_REMINDER_JOB_ACTION,'lp_mpr_send_missing_reminder',10, 2 );
 } );
 
 function lp_mpr_release_reservations( $order_id, $issue_ver = 0 ) {
@@ -1777,13 +2019,14 @@ function lp_mpr_release_reservations( $order_id, $issue_ver = 0 ) {
 	$pending = (array) $order->get_meta( '_lp_mpr_pending', true );
 	if ( empty( $pending ) ) { $order->delete_meta_data( '_lp_mpr_reservations' ); $order->save(); return; }
 
-	foreach ( (array) $res['products'] as $pid => $qty ) {
-		$pid = absint( $pid ); $qty = max( 0, (int) $qty ); if ( ! $pid || $qty <= 0 ) continue;
-		if ( apply_filters( 'lp_mpr_skip_external_stock_manager', false, $pid ) ) continue;
-		$p = wc_get_product( $pid ); if ( $p && $p->managing_stock() ) wc_update_product_stock( $p, $qty, 'increase' );
-	}
-	$order->add_order_note( __( 'MPR: Reserverte varer er frigitt (tidsavbrudd).', 'lilleprinsen' ), false );
-	$order->delete_meta_data( '_lp_mpr_reservations' ); $order->save();
+        foreach ( (array) $res['products'] as $pid => $qty ) {
+                $pid = absint( $pid ); $qty = max( 0, (int) $qty ); if ( ! $pid || $qty <= 0 ) continue;
+                if ( apply_filters( 'lp_mpr_skip_external_stock_manager', false, $pid ) ) continue;
+                $p = wc_get_product( $pid ); if ( $p && $p->managing_stock() ) wc_update_product_stock( $p, $qty, 'increase' );
+        }
+        $order->add_order_note( __( 'MPR: Reserverte varer er frigitt (tidsavbrudd).', 'lilleprinsen' ), false );
+        lp_mpr_append_log_entry( $order, __( 'Reserverte varer ble frigitt etter tidsavbrudd.', 'lilleprinsen' ), 'reservasjon_frigitt', 'system' );
+        $order->delete_meta_data( '_lp_mpr_reservations' ); $order->save();
 }
 /* ==========================================================
  *           ATOMISK MUTASJON V2 + EKSTRA-GEBYR (per forslag)
@@ -2066,19 +2309,28 @@ function lp_mpr_create_extra_fee_order( WC_Order $parent, array $payload, float 
 }
 
 function lp_mpr_email_extra_fee_invoice( WC_Order $parent, WC_Order $child, float $amount_gross ) : void {
-	$email = $parent->get_billing_email(); if ( ! $email ) return;
-	$link  = $child->get_checkout_payment_url();
-	$body  = sprintf( __( "Du har godkjent erstatningsvarer som er dyrere enn originalen.\nVennligst betal mellomlegget: %.2f\n\nBetal her: %s\n\nNår betalingen er fullført oppdaterer vi ordren.", 'lilleprinsen' ), $amount_gross, esc_url( $link ) );
-	$headers = array( 'Content-Type: text/plain; charset=UTF-8' );
-	wc_mail( $email, __( 'Tilleggsbetaling for erstatningsvarer', 'lilleprinsen' ), $body, $headers );
+        $email = $parent->get_billing_email(); if ( ! $email ) return;
+        $link  = $child->get_checkout_payment_url();
+        $body  = '<p>' . esc_html__( 'Du har godkjent erstatningsvarer som koster litt mer enn originalen.', 'lilleprinsen' ) . '</p>';
+        $body .= '<p>' . sprintf( esc_html__( 'Mellomlegget som gjenstår er %s. Når betalingen er fullført oppdaterer vi ordren automatisk.', 'lilleprinsen' ), wp_kses_post( wc_price( $amount_gross, array( 'currency' => $parent->get_currency() ) ) ) ) . '</p>';
+        $body .= '<p style="margin:18px 0 0;color:#475569;">' . esc_html__( 'Har du spørsmål? Svar gjerne på denne e-posten.', 'lilleprinsen' ) . '</p>';
+        lp_mpr_send_branded_email(
+                $email,
+                __( 'Tilleggsbetaling for erstatningsvarer', 'lilleprinsen' ),
+                __( 'Fullfør betalingen for erstatningsvarene', 'lilleprinsen' ),
+                $body,
+                array( 'label' => __( 'Betal mellomlegget', 'lilleprinsen' ), 'url' => $link ),
+                $parent,
+                'kunde_godkjent_venter'
+        );
 }
 
 add_action( 'woocommerce_order_status_processing', 'lp_mpr_on_fee_order_paid' );
 add_action( 'woocommerce_order_status_completed',  'lp_mpr_on_fee_order_paid' );
 add_action( 'woocommerce_payment_complete',        'lp_mpr_on_fee_order_paid' );
 function lp_mpr_on_fee_order_paid( $fee_order_id ) {
-	$fee = wc_get_order( $fee_order_id ); if ( ! $fee ) return;
-	$parent_id = (int) $fee->get_meta( '_lp_mpr_parent_order_id', true ); if ( ! $parent_id ) return;
+        $fee = wc_get_order( $fee_order_id ); if ( ! $fee ) return;
+        $parent_id = (int) $fee->get_meta( '_lp_mpr_parent_order_id', true ); if ( ! $parent_id ) return;
 	$parent = wc_get_order( $parent_id ); if ( ! $parent ) return;
 
 	$pending = (array) $parent->get_meta( '_lp_mpr_pending', true );
@@ -2100,16 +2352,56 @@ function lp_mpr_on_fee_order_paid( $fee_order_id ) {
 
 		if ( apply_filters( 'lp_mpr_delete_meta_on_success', true, $parent, $pending['payload'] ) ) $parent->delete_meta_data( '_lp_missing_replacements' );
 
-		$parent->update_status( 'oppdatert', __( 'Erstatninger brukt etter mottatt tilleggsbetaling.', 'lilleprinsen' ), true );
-		$parent->save();
+                $parent->update_status( 'oppdatert', __( 'Erstatninger brukt etter mottatt tilleggsbetaling.', 'lilleprinsen' ), true );
+                $parent->save();
 
-		$fee->update_status( 'completed', __( 'Tilleggsbetaling registrert (MPR).', 'lilleprinsen' ), true ); $fee->save();
+                $fee->update_status( 'completed', __( 'Tilleggsbetaling registrert (MPR).', 'lilleprinsen' ), true ); $fee->save();
 
-		lp_mpr_send_customer_confirmation( $parent, $result );
-	} catch ( Throwable $e ) {
-		$parent->add_order_note( sprintf( __( 'MPR: Feil under bruk etter betaling: %s', 'lilleprinsen' ), $e->getMessage() ), false );
-		throw $e;
-	}
+                lp_mpr_send_customer_confirmation( $parent, $result );
+                lp_mpr_append_log_entry( $parent, __( 'Tilleggsbetaling mottatt og endringer brukt.', 'lilleprinsen' ), 'kunde_godkjent', 'system' );
+        } catch ( Throwable $e ) {
+                $parent->add_order_note( sprintf( __( 'MPR: Feil under bruk etter betaling: %s', 'lilleprinsen' ), $e->getMessage() ), false );
+                throw $e;
+        }
+}
+
+add_action( 'woocommerce_order_status_failed',    'lp_mpr_on_fee_order_not_paid' );
+add_action( 'woocommerce_order_status_cancelled', 'lp_mpr_on_fee_order_not_paid' );
+function lp_mpr_on_fee_order_not_paid( $fee_order_id ) {
+        $fee = wc_get_order( $fee_order_id ); if ( ! $fee ) return;
+        $parent_id = (int) $fee->get_meta( '_lp_mpr_parent_order_id', true ); if ( ! $parent_id ) return;
+        $parent = wc_get_order( $parent_id ); if ( ! $parent ) return;
+
+        $pending     = (array) $parent->get_meta( '_lp_mpr_pending', true );
+        $hash_parent = (string) ( $pending['hash'] ?? '' );
+        $hash_child  = (string) $fee->get_meta( '_lp_mpr_hash', true );
+        if ( $hash_parent && $hash_child && $hash_parent !== $hash_child ) return; // annen endring gjort
+        if ( empty( $pending ) ) return;
+
+        $issue     = (array) $parent->get_meta( '_lp_mpr_issue', true );
+        $issue_ver = (int) ( $issue['ver'] ?? 0 );
+
+        lp_mpr_release_reservations( $parent->get_id(), $issue_ver );
+        $issue['consumed'] = false;
+        $parent->update_meta_data( '_lp_mpr_issue', $issue );
+        $parent->save();
+
+        $pay_url = $fee->get_checkout_payment_url();
+        $portal  = apply_filters( 'lp_mpr_portal_url', '', $parent->get_id() );
+        $body  = '<p>' . esc_html__( 'Vi fikk ikke godkjent betalingen for erstatningsvarene.', 'lilleprinsen' ) . '</p>';
+        $body .= '<p>' . esc_html__( 'Vi har frigitt reservasjonen. Du kan prøve betalingen på nytt eller åpne portalen for å bekrefte på nytt.', 'lilleprinsen' ) . '</p>';
+        lp_mpr_send_branded_email(
+                $parent->get_billing_email(),
+                __( 'Betalingen ble ikke godkjent', 'lilleprinsen' ),
+                __( 'Betaling mislyktes – vil du prøve igjen?', 'lilleprinsen' ),
+                $body,
+                array( 'label' => __( 'Prøv betalingen på nytt', 'lilleprinsen' ), 'url' => $pay_url ?: $portal ),
+                $parent,
+                'betaling_feilet'
+        );
+        if ( $portal ) {
+                lp_mpr_append_log_entry( $parent, __( 'Betaling mislyktes – reservasjon slettet og kunde varslet.', 'lilleprinsen' ), 'betaling_feilet', 'system', array( 'portal' => $portal ) );
+        }
 }
 
 /* ===== Unngå dobbel lagerreduksjon ved reservasjon → apply ===== */
@@ -2151,18 +2443,26 @@ if ( ! function_exists( 'lp_mpr_send_customer_confirmation' ) ) {
 		$send = apply_filters( 'lp_mpr_send_customer_email', true, $order, $result ); if ( ! $send ) return;
 		$email = $order->get_billing_email(); if ( ! $email ) return;
 		$order_url = $order->get_view_order_url();
-		$lines = array();
-		if ( ! empty( $result['changes'] ) ) {
-			foreach ( $result['changes'] as $c ) {
-				$old = $c['old']; $lines[] = sprintf( "%s: %d → %d", $old['name'], $old['qty_before'], $old['qty_after'] );
-				foreach ( $c['new_added'] as $n ) $lines[] = sprintf( "Erstattet med: %s × %d", $n['name'], $n['qty'] );
-			}
-		}
-		$subject = sprintf( __( 'Vi har oppdatert bestillingen din #%s hos Lilleprinsen', 'lilleprinsen' ), $order->get_order_number() );
-		$body    = implode( "\n", $lines ) . "\n\n" . __( 'Pris per enhet er uendret. Du kan se ordren her:', 'lilleprinsen' ) . "\n" . esc_url( $order_url ) . "\n\n" . __( 'Si ifra hvis du lurer på noe 🙂', 'lilleprinsen' );
-		$headers = array( 'Content-Type: text/html; charset=UTF-8' );
-		wc_mail( $email, $subject, nl2br( wp_kses_post( $body ) ), $headers );
-	}
+                $lines = array();
+                if ( ! empty( $result['changes'] ) ) {
+                        foreach ( $result['changes'] as $c ) {
+                                $old = $c['old']; $lines[] = sprintf( "%s: %d → %d", $old['name'], $old['qty_before'], $old['qty_after'] );
+                                foreach ( $c['new_added'] as $n ) $lines[] = sprintf( "Erstattet med: %s × %d", $n['name'], $n['qty'] );
+                        }
+                }
+                $subject = sprintf( __( 'Vi har oppdatert bestillingen din #%s hos Lilleprinsen', 'lilleprinsen' ), $order->get_order_number() );
+                $html_lines = '';
+                foreach ( $lines as $line ) {
+                        $html_lines .= '<li>' . esc_html( $line ) . '</li>';
+                }
+                $body  = '<p>' . esc_html__( 'Takk for at du valgte erstatning! Vi har oppdatert bestillingen din.', 'lilleprinsen' ) . '</p>';
+                if ( $html_lines ) {
+                        $body .= '<ul style="padding-left:20px;line-height:1.5;">' . $html_lines . '</ul>';
+                }
+                $body .= '<p>' . esc_html__( 'Pris per enhet er uendret. Du kan se ordren din her:', 'lilleprinsen' ) . '</p>';
+                $body .= '<p><a href="' . esc_url( $order_url ) . '" style="color:#0ea5e9;font-weight:700;text-decoration:none;">' . esc_html__( 'Åpne ordren', 'lilleprinsen' ) . '</a></p>';
+                lp_mpr_send_branded_email( $email, $subject, __( 'Vi har oppdatert ordren din', 'lilleprinsen' ), $body, array( 'label' => __( 'Se oppdatert ordre', 'lilleprinsen' ), 'url' => $order_url ), $order, 'oppdatert' );
+        }
 }
 
 add_action( 'init', function() {
