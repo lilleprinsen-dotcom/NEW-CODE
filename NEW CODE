@@ -2263,28 +2263,35 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 
         if ( null !== $cap_total_at ) {
                 $current_total = (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
-                if ( $current_total > $baseline_total ) {
-                        $diff = (float) wc_format_decimal( $current_total - $baseline_total, wc_get_price_decimals() );
+                $paid_on_other_order = 0.0;
+                if ( $fee_order_id ) {
+                        $fee_order = wc_get_order( $fee_order_id );
+                        if ( $fee_order ) {
+                                $paid_on_other_order = (float) wc_format_decimal( $fee_order->get_total(), wc_get_price_decimals() );
+                        }
+                }
+
+                $over_original   = (float) wc_format_decimal( max( 0, $current_total - $baseline_total ), wc_get_price_decimals() );
+                $discount_amount = (float) wc_format_decimal( max( $over_original, $paid_on_other_order ), wc_get_price_decimals() );
+
+                if ( $discount_amount > 0 ) {
                         $discount_label = sprintf( __( 'Mellomlegg betalt på Ordre %s', 'lilleprinsen' ), $fee_order_id ? $fee_order_id : $order->get_order_number() );
 
                         foreach ( $order->get_items( 'fee' ) as $fee_item ) {
                                 if ( $discount_label === $fee_item->get_name() ) $order->remove_item( $fee_item->get_id() );
                         }
 
-                        if ( $diff > 0 ) {
-                                $discount = new WC_Order_Item_Fee();
-                                $discount->set_name( $discount_label );
-                                $discount->set_amount( -1 * $diff );
-                                $discount->set_total(  -1 * $diff );
-                                $discount->set_tax_status( 'none' );
-                                $order->add_item( $discount );
+                        $discount = new WC_Order_Item_Fee();
+                        $discount->set_name( $discount_label );
+                        $discount->set_amount( -1 * $discount_amount );
+                        $discount->set_total(  -1 * $discount_amount );
+                        $discount->set_tax_status( 'none' );
+                        $order->add_item( $discount );
 
-                                $order->calculate_totals();
-                                $order->save();
+                        $order->calculate_totals();
+                        $order->save();
 
-                                $discount_applied = true;
-                                $discount_amount  = $diff;
-                        }
+                        $discount_applied = true;
                 }
         }
 
