@@ -2469,13 +2469,27 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
         $paid_on_other_order = 0.0; $fee_reason = ''; $fee_order = null;
         if ( $fee_order_id ) {
                 $fee_order = wc_get_order( $fee_order_id );
-                if ( $fee_order ) {
-                        $paid_on_other_order = (float) wc_format_decimal( $fee_order->get_total(), wc_get_price_decimals() );
-                        $fee_reason = (string) $fee_order->get_meta( '_lp_mpr_fee_reason', true );
-                        if ( '' === $fee_reason ) {
-                                $fee_delta_map = (array) $fee_order->get_meta( '_lp_mpr_delta_breakdown', true );
-                                $fee_reason    = lp_mpr_describe_delta_reasons( $order, $fee_delta_map );
+        }
+
+        // Fallback: hvis vi ikke fikk med ID-en som argument (f.eks. etter manuell kjøring),
+        // sjekk lagret tilleggsordre og bruk den dersom den faktisk er betalt.
+        if ( ! $fee_order ) {
+                $maybe_fee_id = (int) $order->get_meta( '_lp_mpr_child_fee_order_id', true );
+                if ( $maybe_fee_id ) {
+                        $maybe_fee = wc_get_order( $maybe_fee_id );
+                        if ( $maybe_fee && $maybe_fee->is_paid() ) {
+                                $fee_order    = $maybe_fee;
+                                $fee_order_id = $maybe_fee_id;
                         }
+                }
+        }
+
+        if ( $fee_order ) {
+                $paid_on_other_order = (float) wc_format_decimal( $fee_order->get_total(), wc_get_price_decimals() );
+                $fee_reason = (string) $fee_order->get_meta( '_lp_mpr_fee_reason', true );
+                if ( '' === $fee_reason ) {
+                        $fee_delta_map = (array) $fee_order->get_meta( '_lp_mpr_delta_breakdown', true );
+                        $fee_reason    = lp_mpr_describe_delta_reasons( $order, $fee_delta_map );
                 }
         }
 
