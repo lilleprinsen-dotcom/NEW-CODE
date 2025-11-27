@@ -139,6 +139,56 @@ function lp_mpr_apply_discount_to_delta( float $delta, array $discount_ctx ) : f
         return (float) wc_format_decimal( $delta * $factor, wc_get_price_decimals() );
 }
 
+/** Kundevennlig oppsummering etter oppdatering */
+function lp_mpr_build_customer_summary( WC_Order $order, array $result ) : array {
+        $pricing = (array) ( $result['pricing'] ?? array() );
+        $summary = array(
+                'order_total_html' => $pricing['order_total_html'] ?? wc_price( $order->get_total(), array( 'currency' => $order->get_currency() ) ),
+                'added'            => array(),
+                'removed'          => array(),
+        );
+
+        $currency = $order->get_currency();
+        foreach ( (array) ( $result['changes'] ?? array() ) as $change ) {
+                $old        = (array) ( $change['old'] ?? array() );
+                $old_name   = wp_strip_all_tags( $old['name'] ?? '' );
+                $qty_before = max( 0, (int) ( $old['qty_before'] ?? 0 ) );
+                $qty_after  = max( 0, (int) ( $old['qty_after'] ?? 0 ) );
+                $removed_qty = $qty_before > $qty_after ? $qty_before - $qty_after : 0;
+                if ( $removed_qty > 0 ) {
+                        $summary['removed'][] = array(
+                                'name' => $old_name ?: __( 'Opprinnelig vare', 'lilleprinsen' ),
+                                'qty'  => $removed_qty,
+                        );
+                }
+
+                foreach ( (array) ( $change['new_added'] ?? array() ) as $n ) {
+                        $qty = max( 0, (int) ( $n['qty'] ?? 0 ) );
+                        if ( $qty <= 0 ) continue;
+                        $summary['added'][] = array(
+                                'name'       => wp_strip_all_tags( $n['name'] ?? '' ),
+                                'qty'        => $qty,
+                                'price_html' => wc_price( (float) ( $n['total_gross'] ?? 0.0 ), array( 'currency' => $currency ) ),
+                        );
+                }
+        }
+
+        return $summary;
+}
+
+function lp_mpr_store_customer_summary( WC_Order $order, array $result ) : string {
+        $summary = lp_mpr_build_customer_summary( $order, $result );
+        if ( empty( $summary['order_total_html'] ) && empty( $summary['added'] ) && empty( $summary['removed'] ) ) return '';
+
+        $token = wp_generate_password( 12, false, false );
+        set_transient( 'lp_mpr_summary_' . $token, array(
+                'order_id' => $order->get_id(),
+                'data'     => $summary,
+        ), HOUR_IN_SECONDS );
+
+        return $token;
+}
+
 /** Stabil hash for payload (ekskluderer flyktige felt) */
 function lp_mpr_selection_hash( array $payload ) : string {
 	$stable = $payload;
@@ -174,19 +224,38 @@ function lp_mpr_thumb_html( ?WC_Product $product, string $class = 'lp-thumb', st
                         }
                 }
         }
+
+        $style = 'width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff';
+        $attrs = array(
+                'class'          => $class,
+                'loading'        => 'lazy',
+                'decoding'       => 'async',
+                'alt'            => $alt,
+                'style'          => $style,
+                'referrerpolicy' => 'no-referrer',
+        );
+
         if ( $img_id ) {
-                $html = wp_get_attachment_image( $img_id, 'thumbnail', false, array(
-                        'class'    => $class,
-                        'loading'  => 'lazy',
-                        'decoding' => 'async',
-                        'alt'      => $alt,
-                        'style'    => 'width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff',
-                ) );
-                if ( $html ) return $html;
+                $url = wp_get_attachment_image_url( $img_id, 'thumbnail' );
+                if ( $url ) {
+                        $attrs['src'] = esc_url_raw( $url );
+                        return '<img ' . lp_mpr_render_html_attributes( $attrs ) . ' />';
+                }
         }
 
-        $src = wc_placeholder_img_src( 'thumbnail' );
-        return '<img src="' . esc_url( $src ) . '" alt="' . esc_attr( $alt ) . '" class="' . esc_attr( $class ) . '" loading="lazy" decoding="async" style="width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff" />';
+        $attrs['src'] = wc_placeholder_img_src( 'thumbnail' );
+        return '<img ' . lp_mpr_render_html_attributes( $attrs ) . ' />';
+}
+
+/** Trygg attributt-builder for HTML */
+function lp_mpr_render_html_attributes( array $attrs ) : string {
+        $out = array();
+        foreach ( $attrs as $k => $v ) {
+                $k = sanitize_key( $k );
+                if ( '' === $k ) continue;
+                $out[] = $k . '="' . esc_attr( $v ) . '"';
+        }
+        return implode( ' ', $out );
 }
 
 /* ==========================================================
@@ -1241,6 +1310,11 @@ function lp_mpr_portal_action() {
                 $redirect = add_query_arg( 'lp_mpr_done', '1', lp_mpr_build_portal_url( $order, $cur_ver ) );
                 $pricing = (array) ( $result['pricing'] ?? array() );
                 $order_total_html = $pricing['order_total_html'] ?? wp_kses_post( wc_price( $order->get_total(), array( 'currency' => $order->get_currency() ) ) );
+                $summary_key = '';
+                $delta_sum   = isset( $pricing['delta_gross_sum'] ) ? (float) $pricing['delta_gross_sum'] : 0.0;
+                if ( $delta_sum <= 0 && empty( $result['pending_fee'] ) ) {
+                        $summary_key = lp_mpr_store_customer_summary( $order, $result );
+                }
 
                 $response = array( 'ok' => true, 'pricing' => $pricing );
                 if ( ! empty( $result['pending_fee']['order_id'] ) ) {
@@ -1250,6 +1324,12 @@ function lp_mpr_portal_action() {
                 } else {
                         $response['message'] = sprintf( __( 'Ordren er oppdatert. Ny totalsum: %s', 'lilleprinsen' ), $order_total_html );
                         $response['order_total_html'] = $order_total_html;
+                        if ( $summary_key ) {
+                                $response['redirect'] = add_query_arg( array(
+                                        'lp_mpr_done'    => '1',
+                                        'lp_mpr_summary' => rawurlencode( $summary_key ),
+                                ), $redirect );
+                        }
                 }
 
                 wp_send_json_success( $response );
@@ -1889,14 +1969,30 @@ add_action( 'init', function() {
 	) );
 });
 add_filter( 'wc_order_statuses', function( $statuses ) {
-	$new = array();
-	foreach ( $statuses as $key => $label ) {
-		$new[ $key ] = $label;
-		if ( 'wc-completed' === $key ) $new['wc-oppdatert'] = _x( 'Oppdatert', 'Order status', 'lilleprinsen' );
-	}
-	if ( ! isset( $new['wc-oppdatert'] ) ) $new['wc-oppdatert'] = _x( 'Oppdatert', 'Order status', 'lilleprinsen' );
-	return $new;
+        $new = array();
+        foreach ( $statuses as $key => $label ) {
+                $new[ $key ] = $label;
+                if ( 'wc-completed' === $key ) $new['wc-oppdatert'] = _x( 'Oppdatert', 'Order status', 'lilleprinsen' );
+        }
+        if ( ! isset( $new['wc-oppdatert'] ) ) $new['wc-oppdatert'] = _x( 'Oppdatert', 'Order status', 'lilleprinsen' );
+        return $new;
 } );
+
+function lp_mpr_consume_customer_summary( string $key, WC_Order $order ) : array {
+        $key = trim( $key );
+        if ( '' === $key ) return array();
+
+        $stored = get_transient( 'lp_mpr_summary_' . $key );
+        if ( empty( $stored['order_id'] ) || (int) $stored['order_id'] !== (int) $order->get_id() ) return array();
+
+        delete_transient( 'lp_mpr_summary_' . $key );
+        $data = (array) ( $stored['data'] ?? array() );
+        $data['order_total_html'] = isset( $data['order_total_html'] ) ? wp_kses_post( $data['order_total_html'] ) : '';
+        $data['added']   = isset( $data['added'] ) && is_array( $data['added'] ) ? $data['added'] : array();
+        $data['removed'] = isset( $data['removed'] ) && is_array( $data['removed'] ) ? $data['removed'] : array();
+
+        return $data;
+}
 /* ==========================================================
  *           STANDALONE PORTAL-RENDER (kun ved rute)
  * ========================================================== */
@@ -1948,10 +2044,12 @@ if ( ! $customer_name ) $customer_name = (string) $order->get_formatted_billing_
 if ( ! $customer_name ) $customer_name = __( 'venn', 'lilleprinsen' );
 $discount_ctx = (array) $order->get_meta( '_lp_mpr_discount_context', true );
 if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
+$summary_key   = isset( $_GET['lp_mpr_summary'] ) ? sanitize_text_field( wp_unslash( $_GET['lp_mpr_summary'] ) ) : '';
+$summary_data  = $summary_key ? lp_mpr_consume_customer_summary( $summary_key, $order ) : array();
 
 ?><!doctype html>
 <html <?php language_attributes(); ?>>
-	<head>
+        <head>
 	<meta charset="<?php bloginfo( 'charset' ); ?>">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?php echo esc_html__( 'Erstatninger for manglende varer', 'lilleprinsen' ); ?></title>
@@ -1974,8 +2072,10 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helve
 .chip{font-size:11px;background:#ecfeff;color:#0e7490;border:1px solid #a5f3fc;padding:2px 8px;border-radius:999px;margin-left:6px;white-space:nowrap}
 .choice{display:flex;gap:10px;align-items:center;padding:10px;border:1px solid var(--br);border-radius:10px;margin:8px 0;background:#f8fafc}
 .choice img{flex:0 0 auto}
-.choice a{color:var(--ink);text-decoration:none}
-.choice a:focus,.choice a:hover{color:var(--accent);text-decoration:underline}
+.choice a,.product-link{color:var(--ink);text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.choice a:focus,.choice a:hover,.product-link:focus,.product-link:hover{color:var(--accent);text-decoration:underline}
+.link-arrow{font-size:12px;line-height:1;color:var(--muted)}
+.screen-reader-text{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
 .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
 button{appearance:none;background:var(--accent);border:0;color:#fff;border-radius:10px;padding:12px 14px;font-weight:700;box-shadow:0 1px 3px rgba(15,23,42,.22)}
 button.secondary{background:#fff;color:var(--ink);border:1px solid var(--br);box-shadow:none}
@@ -1996,6 +2096,12 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .loading-backdrop.visible{display:flex}
 .loading-box{background:#0f172a;color:#fff;padding:16px 18px;border-radius:12px;display:flex;gap:12px;align-items:center;box-shadow:0 10px 30px rgba(0,0,0,.25)}
 .spinner{width:24px;height:24px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;animation:lp-spin 1s linear infinite}
+.summary-header{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.summary-label{font-weight:700;font-size:13px}
+.summary-title{margin:8px 0 4px;font-weight:700}
+.summary-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
+.summary-line{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--ink)}
+.summary-price{margin-left:auto}
 @keyframes lp-spin{to{transform:rotate(360deg)}}
 @media (max-width:480px){ .badge{margin-top:4px; width:100%; justify-content:center;} }
 </style>
@@ -2037,7 +2143,34 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 
 <?php
 if ( isset( $_GET['lp_mpr_done'] ) ) {
-echo '<div class="card"><p><strong>' . esc_html__( 'Takk! Vi har oppdatert ordren din.', 'lilleprinsen' ) . '</strong></p><p class="small">' . esc_html__( 'Du kan lukke siden eller følge med på e-post for bekreftelse.', 'lilleprinsen' ) . '</p></div>';
+echo '<div class="card">';
+echo '<p><strong>' . esc_html__( 'Takk! Vi har oppdatert ordren din.', 'lilleprinsen' ) . '</strong></p><p class="small">' . esc_html__( 'Du kan lukke siden eller følge med på e-post for bekreftelse.', 'lilleprinsen' ) . '</p>';
+if ( ! empty( $summary_data ) ) {
+        echo '<hr />';
+        if ( ! empty( $summary_data['order_total_html'] ) ) {
+                echo '<div class="summary-header"><span class="summary-label">' . esc_html__( 'Ny totalsum', 'lilleprinsen' ) . '</span><span class="badge summary-price">' . wp_kses_post( $summary_data['order_total_html'] ) . '</span></div>';
+        }
+        if ( ! empty( $summary_data['added'] ) ) {
+                echo '<p class="small summary-title">' . esc_html__( 'Lagt til', 'lilleprinsen' ) . '</p><ul class="summary-list">';
+                foreach ( $summary_data['added'] as $added ) {
+                        $name = isset( $added['name'] ) ? (string) $added['name'] : '';
+                        $qty  = isset( $added['qty'] ) ? (int) $added['qty'] : 0;
+                        $price = isset( $added['price_html'] ) ? (string) $added['price_html'] : '';
+                        echo '<li class="summary-line"><span>' . esc_html( $name ) . ' × ' . esc_html( $qty ) . '</span>' . ( $price ? '<span class="badge summary-price">' . wp_kses_post( $price ) . '</span>' : '' ) . '</li>';
+                }
+                echo '</ul>';
+        }
+        if ( ! empty( $summary_data['removed'] ) ) {
+                echo '<p class="small summary-title">' . esc_html__( 'Fjernet', 'lilleprinsen' ) . '</p><ul class="summary-list">';
+                foreach ( $summary_data['removed'] as $removed ) {
+                        $name = isset( $removed['name'] ) ? (string) $removed['name'] : '';
+                        $qty  = isset( $removed['qty'] ) ? (int) $removed['qty'] : 0;
+                        echo '<li class="summary-line"><span>' . esc_html( $name ) . '</span><span class="badge summary-price">− ' . esc_html( $qty ) . '</span></li>';
+                }
+                echo '</ul>';
+        }
+}
+echo '</div>';
 }
 
 if ( empty( $data ) ) {
@@ -2087,16 +2220,22 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 					$delta_html = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
                                         $chip = $mode === 'store_covers' ? esc_html__( 'Butikken dekker', 'lilleprinsen' ) : esc_html__( 'Kunde betaler', 'lilleprinsen' );
                                         $credit_note = $delta < 0 ? '<div class="small refund-note">' . esc_html__( 'Denne er billigere – vi ordner mellomlegget tilbake til deg.', 'lilleprinsen' ) . '</div>' : '';
+                                        $chip_html = $delta > 0 ? '<span class="chip">' . esc_html( $chip ) . '</span>' : '';
 
                                         echo '<li class="choice">';
                                         echo '<input class="lp-choice" type="checkbox" value="' . esc_attr( $idx ) . '" data-qty="' . esc_attr( $sq ) . '"> ';
                                         echo wp_kses_post( lp_mpr_thumb_html( $p, 'lp-thumb', $label ) );
                                         echo '<div style="flex:1;min-width:0">';
-                                        echo $link ? '<a href="' . esc_url( $link ) . '"><strong>' . esc_html( $label ) . '</strong></a>' : '<strong>' . esc_html( $label ) . '</strong>';
+                                        if ( $link ) {
+                                                $aria_label = sprintf( __( 'Åpne %s i ny fane', 'lilleprinsen' ), $label );
+                                                echo '<a class="product-link" href="' . esc_url( $link ) . '" target="_blank" rel="noreferrer noopener" aria-label="' . esc_attr( $aria_label ) . '"><strong>' . esc_html( $label ) . '</strong><span class="link-arrow" aria-hidden="true">↗</span></a>';
+                                        } else {
+                                                echo '<strong>' . esc_html( $label ) . '</strong>';
+                                        }
                                         echo '<div class="small">' . esc_html__( 'Antall', 'lilleprinsen' ) . ': ' . esc_html( $sq ) . '</div>';
                                         echo $credit_note;
                                         echo '</div>';
-                                        echo '<div><span class="badge" title="' . esc_attr__( 'Prisforskjell', 'lilleprinsen' ) . '">' . wp_kses_post( $delta_html ) . '</span><span class="chip">' . esc_html( $chip ) . '</span></div>';
+                                        echo '<div><span class="badge" title="' . esc_attr__( 'Prisforskjell', 'lilleprinsen' ) . '">' . wp_kses_post( $delta_html ) . '</span>' . $chip_html . '</div>';
                                         echo '</li>';
 				}
 				echo '</ul>';
