@@ -114,10 +114,51 @@ function lp_mpr_get_product_unit_gross( WC_Product $p, WC_Order $order ) : float
 }
 
 /** Delta (brutto) gitt original enhetsbrutto og valgt produkt * mengde */
-function lp_mpr_calc_delta_gross( float $orig_unit_gross, WC_Product $p, int $qty, WC_Order $order ) : float {
-    $new_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order );
-    $delta = ( $new_unit_gross - $orig_unit_gross ) * max( 0, $qty );
-    return (float) wc_format_decimal( $delta, wc_get_price_decimals() );
+function lp_mpr_get_coupon_factor_for_product( WC_Product $p, WC_Order $order ) : array {
+        $factor     = 1.0;
+        $applies    = false;
+        $pct_total  = 0.0;
+        $unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order );
+
+        foreach ( (array) $order->get_coupon_codes() as $code ) {
+                $coupon = new WC_Coupon( $code );
+                if ( ! $coupon->get_id() ) continue;
+
+                $type = $coupon->get_discount_type();
+                if ( ! $coupon->is_valid_for_product( $p, array() ) ) continue;
+
+                if ( in_array( $type, array( 'percent', 'percent_product' ), true ) ) {
+                        $pct_total += (float) $coupon->get_amount();
+                        $applies = true;
+                        continue;
+                }
+
+                if ( 'fixed_product' === $type ) {
+                        $applies = true;
+                        if ( $unit_gross > 0 ) {
+                                $factor = min( $factor, max( 0.0, ( $unit_gross - (float) $coupon->get_amount() ) / $unit_gross ) );
+                        }
+                }
+        }
+
+        if ( $pct_total > 0 ) {
+                $applies = true;
+                $pct_total = min( 100.0, $pct_total );
+                $factor    = min( $factor, ( 100.0 - $pct_total ) / 100.0 );
+        }
+
+        return array(
+                'factor'  => (float) wc_format_decimal( max( 0.0, $factor ), 6 ),
+                'applies' => (bool) $applies,
+        );
+}
+
+function lp_mpr_calc_delta_gross( float $orig_unit_gross, WC_Product $p, int $qty, WC_Order $order, bool &$coupon_applied = false ) : float {
+        $coupon_factor = lp_mpr_get_coupon_factor_for_product( $p, $order );
+        $new_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order ) * (float) $coupon_factor['factor'];
+        $coupon_applied = (bool) $coupon_factor['applies'];
+        $delta = ( $new_unit_gross - $orig_unit_gross ) * max( 0, $qty );
+        return (float) wc_format_decimal( $delta, wc_get_price_decimals() );
 }
 
 /** Prisdetaljer for et produkt i ordre-kontekst (per enhet) */
@@ -208,7 +249,8 @@ function lp_mpr_get_discount_context( WC_Order $order ) : array {
 }
 
 /** Påfør prosentvis rabatt på et positivt mellomlegg */
-function lp_mpr_apply_discount_to_delta( float $delta, array $discount_ctx ) : float {
+function lp_mpr_apply_discount_to_delta( float $delta, array $discount_ctx, bool $coupon_priced = false ) : float {
+        if ( $coupon_priced ) return (float) wc_format_decimal( $delta, wc_get_price_decimals() );
         $percent = isset( $discount_ctx['percent'] ) ? (float) $discount_ctx['percent'] : 0.0;
         if ( $delta <= 0 || $percent <= 0 ) return (float) wc_format_decimal( $delta, wc_get_price_decimals() );
         $factor = max( 0.0, min( 1.0, ( 100.0 - $percent ) / 100.0 ) );
@@ -951,7 +993,9 @@ foreach ( $order->get_items( 'line_item' ) as $item_id => $item ) {
 				if ( $pid && $sq > 0 ) {
 					$p = wc_get_product( $pid );
 					if ( $p ) {
-                                                $delta = lp_mpr_apply_discount_to_delta( lp_mpr_calc_delta_gross( $orig_unit_gross, $p, $sq, $order ), $discount_ctx );
+                                                $coupon_applied = false;
+                                                $delta = lp_mpr_calc_delta_gross( $orig_unit_gross, $p, $sq, $order, $coupon_applied );
+                                                $delta = lp_mpr_apply_discount_to_delta( $delta, $discount_ctx, $coupon_applied );
 						if ( $mode === '' ) $mode = $delta > 0 ? 'customer_pays' : 'store_covers';
 						$suggestions[] = array(
 							'product_id' => $p->get_id(),
@@ -1433,8 +1477,9 @@ add_action( 'lp_mpr_suggestion_emailed', function( WC_Order $order, string $url,
 
                         $product = wc_get_product( $pid );
                         $name    = $product ? wp_strip_all_tags( $product->get_formatted_name() ) : '#' . $pid;
-                        $delta_raw = $product ? lp_mpr_calc_delta_gross( $orig_unit_gross, $product, $qty, $order ) : 0.0;
-                        $delta     = lp_mpr_apply_discount_to_delta( $delta_raw, $discount_ctx );
+                        $coupon_applied = false;
+                        $delta_raw = $product ? lp_mpr_calc_delta_gross( $orig_unit_gross, $product, $qty, $order, $coupon_applied ) : 0.0;
+                        $delta     = lp_mpr_apply_discount_to_delta( $delta_raw, $discount_ctx, $coupon_applied );
 
                         $delta_label = $delta === 0.0
                                 ? __( 'ingen prisendring', 'lilleprinsen' )
@@ -1876,10 +1921,11 @@ add_action( 'wp_ajax_lp_mpr_preview_delta', function () {
 	}
 
         $unit = lp_mpr_get_line_unit_prices( $order, $item );
-        $delta = lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $qty, $order );
+        $coupon_applied = false;
+        $delta = lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $qty, $order, $coupon_applied );
         $discount_ctx = (array) $order->get_meta( '_lp_mpr_discount_context', true );
         if ( empty( $discount_ctx ) ) $discount_ctx = lp_mpr_get_discount_context( $order );
-        $delta = lp_mpr_apply_discount_to_delta( $delta, $discount_ctx );
+        $delta = lp_mpr_apply_discount_to_delta( $delta, $discount_ctx, $coupon_applied );
 	$sign  = $delta > 0 ? '+ ' : ( $delta < 0 ? '− ' : '' );
 	$html  = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
 	wp_send_json_success( array( 'html' => wp_kses_post( $html ) ) );
@@ -2064,11 +2110,12 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
 			if ( $qty <= 0 ) continue;
 			if ( (string) ( $rep['mode'] ?? 'customer_pays' ) !== 'customer_pays' ) { $left -= $qty; continue; } // butikk dekker → ikke med i avgift
 
-			$p = wc_get_product( absint( $rep['product_id'] ) );
-			if ( ! $p ) { $left -= $qty; continue; }
-                        $repl_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order );
+                        $p = wc_get_product( absint( $rep['product_id'] ) );
+                        if ( ! $p ) { $left -= $qty; continue; }
+                        $coupon_factor = lp_mpr_get_coupon_factor_for_product( $p, $order );
+                        $repl_unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order ) * (float) $coupon_factor['factor'];
                         $diff_raw = max( 0, $repl_unit_gross - $orig_unit_gross ) * $qty; // Kunde betaler kun POSITIVT mellomlegg
-                        $diff = lp_mpr_apply_discount_to_delta( $diff_raw, $discount_ctx );
+                        $diff = lp_mpr_apply_discount_to_delta( $diff_raw, $discount_ctx, (bool) $coupon_factor['applies'] );
 			$d_line += $diff;
 			$left -= $qty;
 		}
@@ -2182,15 +2229,17 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 			$product = wc_get_product( $pid ); if ( ! $product ) continue;
 
                   $price_data = lp_mpr_get_product_unit_breakdown_for_order( $product, $order );
+                  $coupon_factor = lp_mpr_get_coupon_factor_for_product( $product, $order );
+                  $effective_discount_factor = min( $gross_discount_factor, (float) $coupon_factor['factor'] );
                   $tax_map_subtotal = lp_mpr_scale_tax_amounts( $price_data['taxes'], $qty );
-                  $tax_map_total    = lp_mpr_scale_tax_amounts( $price_data['taxes'], $gross_discount_factor * $qty );
+                  $tax_map_total    = lp_mpr_scale_tax_amounts( $price_data['taxes'], $effective_discount_factor * $qty );
 
                   $line = new WC_Order_Item_Product();
                   $line->set_product( $product );
                   $line->set_name( wp_strip_all_tags( $product->get_formatted_name() ) );
                   $line->set_quantity( $qty );
                   $line->set_subtotal( max( 0, (float) $price_data['unit_net'] ) * $qty );
-                  $line->set_total(    max( 0, (float) $price_data['unit_net'] * $gross_discount_factor ) * $qty );
+                  $line->set_total(    max( 0, (float) $price_data['unit_net'] * $effective_discount_factor ) * $qty );
                   $line_tax_class = $product->get_tax_class();
                   if ( '' === $line_tax_class ) $line_tax_class = $tax_class;
                   $line->set_tax_class( $line_tax_class );
@@ -2214,8 +2263,8 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 				'product_id'     => $pid,
 				'name'           => $product->get_name(),
 				'qty'            => $qty,
-                          'subtotal_gross' => (float) wc_format_decimal( (float) $price_data['unit_gross'] * $qty, wc_get_price_decimals() ),
-                          'total_gross'    => (float) wc_format_decimal( (float) $price_data['unit_gross'] * $gross_discount_factor * $qty, wc_get_price_decimals() ),
+                                'subtotal_gross' => (float) wc_format_decimal( (float) $price_data['unit_gross'] * $qty, wc_get_price_decimals() ),
+                          'total_gross'    => (float) wc_format_decimal( (float) $price_data['unit_gross'] * $effective_discount_factor * $qty, wc_get_price_decimals() ),
 				'stock_before'   => $stock_before,
 				'stock_after'    => $stock_after,
 			);
@@ -2672,6 +2721,7 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .refund-note{margin-top:4px;line-height:1.4}
 .li{list-style:none;padding:0;margin:0}
 .qty{font-variant-numeric:tabular-nums;color:var(--muted)}
+.price-line{margin-top:4px;color:var(--muted)}
 .old{display:flex;gap:10px;align-items:center;flex:1;min-width:0}
 .status{display:none;margin:10px 0;padding:12px 14px;border-radius:12px;border:1px solid var(--br);background:#f8fafc;font-size:13px;line-height:1.5}
 .status.show{display:block}
@@ -2816,9 +2866,10 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 			$key = (string) $item_id;
 			if ( empty( $data[ $key ]['enabled'] ) ) continue;
 
-			$ordered     = (int) $item->get_quantity();
-			$missing_qty = max( 0, (int) ( $data[ $key ]['qty'] ?? 0 ) );
-			$sugs        = ! empty( $data[ $key ]['suggestions'] ) ? (array) $data[ $key ]['suggestions'] : array();
+                        $ordered     = (int) $item->get_quantity();
+                        $missing_qty = max( 0, (int) ( $data[ $key ]['qty'] ?? 0 ) );
+                        $sugs        = ! empty( $data[ $key ]['suggestions'] ) ? (array) $data[ $key ]['suggestions'] : array();
+                        $unit        = lp_mpr_get_line_unit_prices( $order, $item );
 
 			// Gammelt produktbilde
 			$old_prod = null;
@@ -2831,26 +2882,37 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 			echo '<div class="row old">';
                         echo wp_kses_post( lp_mpr_thumb_html( $old_prod, 'lp-thumb', $item->get_name() ) );
 			echo '<div style="flex:1"><div><strong>' . esc_html( $item->get_name() ) . '</strong></div><div class="tag">' . esc_html__( 'Opprinnelig vare', 'lilleprinsen' ) . '</div></div>';
-			echo '<div class="qty small">' . esc_html__( 'Bestilt', 'lilleprinsen' ) . ': ' . esc_html( $ordered ) . '</div>';
-			echo '<div class="qty small">' . esc_html__( 'Mangler', 'lilleprinsen' ) . ': ' . esc_html( $missing_qty ) . '</div>';
+                        echo '<div class="qty small">' . esc_html__( 'Bestilt', 'lilleprinsen' ) . ': ' . esc_html( $ordered ) . '</div>';
+                        echo '<div class="qty small">' . esc_html__( 'Mangler', 'lilleprinsen' ) . ': ' . esc_html( $missing_qty ) . '</div>';
+                        $orig_price_html = wc_price( (float) $unit['unit_gross_total'], array( 'currency' => $order->get_currency() ) );
+                        echo '<div class="small price-line">' . sprintf( esc_html__( 'Opprinnelig pris per stk.: %s', 'lilleprinsen' ), wp_kses_post( $orig_price_html ) ) . '</div>';
 			echo '</div>';
 
 			echo '<hr />';
 			if ( ! empty( $sugs ) ) {
 				echo '<ul class="li">';
-				$unit = lp_mpr_get_line_unit_prices( $order, $item );
                                 foreach ( array_values( $sugs ) as $idx => $s ) {
                                         $pid = absint( $s['product_id'] ?? 0 );
                                         $sq  = max( 0, (int) ( $s['qty'] ?? 0 ) );
                                         $mode = in_array( (string) ( $s['mode'] ?? '' ), array( 'customer_pays', 'store_covers' ), true ) ? (string) $s['mode'] : 'customer_pays';
                                         if ( ! $pid || $sq <= 0 ) continue;
 
-					$p     = wc_get_product( $pid );
-					$label = $p ? wp_strip_all_tags( $p->get_formatted_name() ) : '#' . $pid;
-					$link  = ( $p && $p->is_visible() ) ? get_permalink( $p->get_id() ) : '';
+                                        $p     = wc_get_product( $pid );
+                                        $label = $p ? wp_strip_all_tags( $p->get_formatted_name() ) : '#' . $pid;
+                                        $link  = ( $p && $p->is_visible() ) ? get_permalink( $p->get_id() ) : '';
 
-                                        $delta = $p ? lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $sq, $order ) : 0.0;
-                                        $delta = lp_mpr_apply_discount_to_delta( $delta, $discount_ctx );
+                                        $coupon_factor = $p ? lp_mpr_get_coupon_factor_for_product( $p, $order ) : array( 'factor' => 1.0, 'applies' => false );
+                                        $price_data    = $p ? lp_mpr_get_product_unit_breakdown_for_order( $p, $order ) : array( 'unit_gross' => 0 );
+                                        $unit_price_html = $p ? wc_price( (float) ( $price_data['unit_gross'] ?? 0 ), array( 'currency' => $order->get_currency() ) ) : '';
+                                        $discounted_price_html = '';
+                                        if ( $p && (float) $coupon_factor['factor'] < 1.0 ) {
+                                                $discounted_price = (float) ( $price_data['unit_gross'] ?? 0 ) * (float) $coupon_factor['factor'];
+                                                $discounted_price_html = wc_price( $discounted_price, array( 'currency' => $order->get_currency() ) );
+                                        }
+
+                                        $coupon_applied = (bool) ( $coupon_factor['applies'] ?? false );
+                                        $delta = $p ? lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $sq, $order, $coupon_applied ) : 0.0;
+                                        $delta = lp_mpr_apply_discount_to_delta( $delta, $discount_ctx, $coupon_applied );
                                         $sign  = $delta > 0 ? '+ ' : ( $delta < 0 ? '− ' : '' );
                                         $delta_html = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
                                         $delta_plain = $sign . wp_strip_all_tags( wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) ) );
@@ -2871,6 +2933,12 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                                 echo '<strong>' . esc_html( $label ) . '</strong>';
                                         }
                                         echo '<div class="small">' . esc_html__( 'Antall', 'lilleprinsen' ) . ': ' . esc_html( $sq ) . '</div>';
+                                        if ( $unit_price_html ) {
+                                                echo '<div class="small price-line">' . sprintf( esc_html__( 'Ny pris per stk.: %s', 'lilleprinsen' ), wp_kses_post( $unit_price_html ) ) . '</div>';
+                                        }
+                                        if ( $discounted_price_html ) {
+                                                echo '<div class="small price-line">' . sprintf( esc_html__( 'Pris med rabatt: %s', 'lilleprinsen' ), wp_kses_post( $discounted_price_html ) ) . '</div>';
+                                        }
                                         echo $credit_note . $paying_note;
                                         echo '</div>';
                                         echo '<div><span class="badge" title="' . esc_attr__( 'Prisforskjell', 'lilleprinsen' ) . '">' . wp_kses_post( $delta_html ) . '</span>' . $chip_html . '</div>';
