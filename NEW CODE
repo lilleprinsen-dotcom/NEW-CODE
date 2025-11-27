@@ -1132,15 +1132,18 @@ function lp_mpr_send_suggestion() {
         }
 
 	// Gjenåpne "issue"
-	$issue = (array) $order->get_meta( '_lp_mpr_issue', true );
-	$ver   = isset( $issue['ver'] ) ? (int) $issue['ver'] : 0;
-	$ver++;
-	$order->update_meta_data( '_lp_mpr_issue', array(
-		'ver'      => $ver,
-		'consumed' => false,
-		'sent_at'  => time(),
-	) );
-	$order->save();
+        $issue = (array) $order->get_meta( '_lp_mpr_issue', true );
+        $ver   = isset( $issue['ver'] ) ? (int) $issue['ver'] : 0;
+        $ver++;
+        $order->update_meta_data( '_lp_mpr_issue', array(
+                'ver'      => $ver,
+                'consumed' => false,
+                'sent_at'  => time(),
+        ) );
+        if ( $order->get_status() !== 'feedback' ) {
+                $order->set_status( 'feedback', __( 'Forslag sendt til kunde for tilbakemelding.', 'lilleprinsen' ) );
+        }
+        $order->save();
 
 	// Throttle
 	$throttle_key = 'lp_mpr_sent_' . $order_id;
@@ -2161,6 +2164,7 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .small{font-size:12px;color:var(--muted)}
 .chat-card textarea{width:100%;border:1px solid var(--br);border-radius:10px;padding:10px;font-family:inherit;font-size:14px;min-height:90px;margin:6px 0}
 .muted-note{color:var(--muted);font-size:12px;margin:4px 0 0}
+.pay-note{color:var(--muted);font-size:12px;margin:4px 0 0}
 .refund-note{margin-top:4px;line-height:1.4}
 .li{list-style:none;padding:0;margin:0}
 .qty{font-variant-numeric:tabular-nums;color:var(--muted)}
@@ -2179,6 +2183,13 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .summary-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
 .summary-line{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--ink)}
 .summary-price{margin-left:auto}
+.lp-step-label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;color:var(--muted);font-size:12px}
+.lp-step-card{position:relative}
+.lp-step-card.completed-step{border-style:dashed;opacity:.9}
+.lp-step-card.future-step{display:none}
+.lp-step-nav{display:flex;gap:8px;justify-content:space-between;margin-top:8px}
+.lp-step-nav button{width:100%}
+.note-line{color:var(--muted);font-size:13px;margin:4px 0 0}
 @keyframes lp-spin{to{transform:rotate(360deg)}}
 @media (max-width:480px){ .badge{margin-top:4px; width:100%; justify-content:center;} }
 </style>
@@ -2200,21 +2211,26 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 <div class="emoji">🤗</div>
 <div>
 <p class="title"><?php echo sprintf( esc_html__( 'Hei %s!', 'lilleprinsen' ), esc_html( $customer_name ) ); ?></p>
-<p class="subtitle"><?php echo esc_html__( 'Vi fant alternativer for varene som mangler. Kryss av det du ønsker – resten fikser vi. ✨', 'lilleprinsen' ); ?></p>
+<p class="subtitle"><?php echo esc_html__( 'Den opprinnelige varen er utsolgt. Velg erstatninger én og én – resten fikser vi for deg. ✨', 'lilleprinsen' ); ?></p>
 </div>
 </div>
 
 <div class="pills">
+<span class="pill"><span class="emoji">📦</span><span><?php echo esc_html__( 'Originalvaren er utsolgt, men vi har forslag klare til deg.', 'lilleprinsen' ); ?></span></span>
 <span class="pill"><span class="emoji">💸</span><span><?php echo esc_html__( 'Velger du en rimeligere erstatning, fører vi mellomlegget tilbake til deg.', 'lilleprinsen' ); ?></span></span>
 <?php if ( $cnt_customer_pays && $cnt_store_covers ) : ?>
 <span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Noen alternativer kan gi et lite mellomlegg.', 'lilleprinsen' ); ?></span></span>
 <?php elseif ( $cnt_customer_pays ) : ?>
 <span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Mellomlegg betales kun om du velger dyrere vare.', 'lilleprinsen' ); ?></span></span>
 <?php else : ?>
-<span class="pill"><span class="emoji">✅</span><span><?php echo esc_html__( 'Butikken dekker eventuelle prisforskjeller.', 'lilleprinsen' ); ?></span></span>
+<span class="pill"><span class="emoji">✅</span><span><?php echo esc_html__( 'Ingen av forslagene koster deg ekstra.', 'lilleprinsen' ); ?></span></span>
 <?php endif; ?>
 <span class="pill"><span class="emoji">🧾</span><span><?php echo esc_html__( 'Velg én eller flere forslag, maks likt antallet som mangler.', 'lilleprinsen' ); ?></span></span>
 </div>
+
+<?php if ( $cnt_customer_pays ) : ?>
+<p class="note-line"><?php echo esc_html__( 'Velger du en dyrere erstatning, dekker du mellomlegget. Vi ber deg bekrefte før vi endrer ordren.', 'lilleprinsen' ); ?></p>
+<?php endif; ?>
 
 <div id="lp-mpr-status" class="status" aria-live="polite"></div>
 
@@ -2297,6 +2313,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 					$delta_html = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
                                         $chip = $mode === 'store_covers' ? esc_html__( 'Butikken dekker', 'lilleprinsen' ) : esc_html__( 'Kunde betaler', 'lilleprinsen' );
                                         $credit_note = $delta < 0 ? '<div class="small refund-note">' . esc_html__( 'Denne er billigere – vi ordner mellomlegget tilbake til deg.', 'lilleprinsen' ) . '</div>' : '';
+                                        $paying_note = ( $mode === 'customer_pays' && $delta > 0 ) ? '<div class="pay-note">' . esc_html__( 'Velger du denne, betaler du mellomlegget for prisforskjellen.', 'lilleprinsen' ) . '</div>' : '';
                                         $chip_html = $delta > 0 ? '<span class="chip">' . esc_html( $chip ) . '</span>' : '';
 
                                         echo '<li class="choice">';
@@ -2310,7 +2327,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                                 echo '<strong>' . esc_html( $label ) . '</strong>';
                                         }
                                         echo '<div class="small">' . esc_html__( 'Antall', 'lilleprinsen' ) . ': ' . esc_html( $sq ) . '</div>';
-                                        echo $credit_note;
+                                        echo $credit_note . $paying_note;
                                         echo '</div>';
                                         echo '<div><span class="badge" title="' . esc_attr__( 'Prisforskjell', 'lilleprinsen' ) . '">' . wp_kses_post( $delta_html ) . '</span>' . $chip_html . '</div>';
                                         echo '</li>';
@@ -2349,6 +2366,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 var cooldown=2500, lastClick=0, redirecting=false;
                 var loadingEl=document.getElementById('lp-mpr-loading');
                 var statusEl=document.getElementById('lp-mpr-status');
+                var stepCards=[], activeStep=0;
 
                 function setLoading(active, text){
                         if(!loadingEl) return;
@@ -2377,18 +2395,66 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                   card.querySelectorAll('.lp-choice:checked').forEach(function(c){ chosen += parseInt(c.getAttribute('data-qty')||'0',10)||0; });
                   return allowed>0 && chosen>allowed;
           }
-          function cardsRequiringSelection(){
-                  var cards = [];
-                  host.querySelectorAll('.lp-portal-item').forEach(function(card){
-                          var choices = card.querySelectorAll('.lp-choice');
-                          var missing = parseInt(card.getAttribute('data-missing')||'0',10)||0;
-                          if(choices.length && missing>0){ cards.push(card); }
-                  });
-                  return cards;
-          }
-          function unansweredCards(cards){
-                  return cards.filter(function(card){ return !card.querySelector('.lp-choice:checked'); });
-          }
+                function cardsRequiringSelection(){
+                        var cards = [];
+                        host.querySelectorAll('.lp-portal-item').forEach(function(card){
+                                var choices = card.querySelectorAll('.lp-choice');
+                                var missing = parseInt(card.getAttribute('data-missing')||'0',10)||0;
+                                if(choices.length && missing>0){ cards.push(card); }
+                        });
+                        return cards;
+                }
+                function unansweredCards(cards){
+                        return cards.filter(function(card){ return !card.querySelector('.lp-choice:checked'); });
+                }
+                function hasSelection(card){ return !!(card && card.querySelector('.lp-choice:checked')); }
+                function updateStepperUI(){
+                        if(!stepCards.length) return;
+                        stepCards.forEach(function(card, idx){
+                                var isActive = idx===activeStep;
+                                var isFuture = idx>activeStep;
+                                var isDone = idx<activeStep && hasSelection(card);
+                                card.classList.toggle('active-step', isActive);
+                                card.classList.toggle('future-step', isFuture);
+                                card.classList.toggle('completed-step', isDone);
+                                var progress = card.querySelector('.step-progress');
+                                if(progress){ progress.textContent = (idx+1) + ' / ' + stepCards.length; }
+                                var approve = card.querySelector('button[data-action="approve_update"]');
+                                if(approve){ approve.disabled = stepCards.length>1 && idx!==stepCards.length-1; }
+                                var nextBtn = card.querySelector('button[data-step-nav="next"]');
+                                if(nextBtn){ nextBtn.disabled = idx>=stepCards.length-1 || !hasSelection(card); }
+                                var prevBtn = card.querySelector('button[data-step-nav="prev"]');
+                                if(prevBtn){ prevBtn.disabled = idx===0; }
+                        });
+                }
+                function setStep(newStep){
+                        if(!stepCards.length) return;
+                        activeStep = Math.max(0, Math.min(stepCards.length-1, newStep));
+                        updateStepperUI();
+                }
+                function initStepper(){
+                        stepCards = cardsRequiringSelection();
+                        if(stepCards.length<=1) return;
+                        stepCards.forEach(function(card, idx){
+                                card.classList.add('lp-step-card');
+                                if(!card.querySelector('.lp-step-label')){
+                                        var label=document.createElement('div');
+                                        label.className='lp-step-label';
+                                        label.innerHTML='<span class="badge step-progress"></span><span class="small"><?php echo esc_js( __( 'Velg en erstatning for hver vare før du godkjenner.', 'lilleprinsen' ) ); ?></span>';
+                                        card.insertBefore(label, card.firstChild);
+                                }
+                                if(!card.querySelector('.lp-step-nav')){
+                                        var nav=document.createElement('div');
+                                        nav.className='lp-step-nav';
+                                        var prev=document.createElement('button'); prev.type='button'; prev.className='secondary'; prev.setAttribute('data-step-nav','prev'); prev.textContent='<?php echo esc_js( __( 'Forrige', 'lilleprinsen' ) ); ?>';
+                                        var next=document.createElement('button'); next.type='button'; next.setAttribute('data-step-nav','next'); next.textContent='<?php echo esc_js( __( 'Neste vare', 'lilleprinsen' ) ); ?>';
+                                        nav.appendChild(prev); nav.appendChild(next);
+                                        card.appendChild(nav);
+                                }
+                        });
+                        setStep(0);
+                }
+                initStepper();
           function post(which, extra){
                         var now=Date.now(); if(now-lastClick<cooldown) return; lastClick=now;
                         var loadingText = (extra && extra.loadingText) ? extra.loadingText : '<?php echo esc_js( __( 'Behandler valgene dine …', 'lilleprinsen' ) ); ?>';
@@ -2412,12 +2478,27 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 }
 
                 host.addEventListener('click', function(e){
+                        var nav = e.target.closest('button[data-step-nav]');
+                        if(nav && stepCards.length){
+                                e.preventDefault();
+                                var dir = nav.getAttribute('data-step-nav');
+                                var currentCard = stepCards[activeStep];
+                                if(dir==='next'){
+                                        if(!hasSelection(currentCard)){ showStatus('<?php echo esc_js( __( 'Velg et alternativ før du går videre.', 'lilleprinsen' ) ); ?>','error'); return; }
+                                        setStep(activeStep+1);
+                                } else {
+                                        setStep(activeStep-1);
+                                }
+                                return;
+                        }
+
                         var t=e.target.closest('button[data-action]'); if(!t) return;
                         var act=t.getAttribute('data-action');
                         if(act==='approve_update'){
                                 var bad=false; host.querySelectorAll('.lp-portal-item').forEach(function(card){ if(overChosen(card)) bad=true; });
                                 if(bad){ showStatus('<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>','error'); return; }
                                 var sel=selections(); if(Object.keys(sel).length===0){ showStatus('<?php echo esc_js( __( 'Huk av et alternativ først 🙂', 'lilleprinsen' ) ); ?>','error'); return; }
+                                if(stepCards.length>1 && activeStep<stepCards.length-1){ showStatus('<?php echo esc_js( __( 'Gå videre og velg for alle varene først.', 'lilleprinsen' ) ); ?>','error'); return; }
                                 var responseCards = cardsRequiringSelection();
                                 if(responseCards.length>1){
                                         var missingAnswers = unansweredCards(responseCards);
@@ -2431,6 +2512,22 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                 var msg=field ? (field.value||'').trim() : '';
                                 if(!msg){ showStatus('<?php echo esc_js( __( 'Skriv en melding først.', 'lilleprinsen' ) ); ?>','error'); return; }
                                 post('send_chat',{message:msg});
+                        }
+                });
+
+                host.addEventListener('change', function(e){
+                        if(!stepCards.length) return;
+                        var choice = e.target.closest('.lp-choice');
+                        if(choice){
+                                var card = choice.closest('.lp-portal-item');
+                                var idx = stepCards.indexOf(card);
+                                if(idx !== -1){
+                                        if(idx===activeStep && hasSelection(card) && activeStep<stepCards.length-1){
+                                                setStep(activeStep+1);
+                                        } else {
+                                                updateStepperUI();
+                                        }
+                                }
                         }
                 });
         })();
