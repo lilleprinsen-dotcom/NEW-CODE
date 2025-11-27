@@ -266,7 +266,9 @@ function lp_mpr_apply_discount_to_delta( float $delta, array $discount_ctx, bool
         // leave the delta untouched. When coupons do apply, the replacement price is
         // already reduced in lp_mpr_calc_delta_gross — applying the order discount
         // again would double-discount the difference customers pay.
-        if ( $delta <= 0 || $percent <= 0 || ! $coupon_priced ) return $delta;
+        if ( $delta <= 0 || $percent <= 0 ) return $delta;
+
+        if ( $coupon_priced ) return $delta;
 
         $factor = max( 0.0, ( 100.0 - min( 100.0, $percent ) ) / 100.0 );
 
