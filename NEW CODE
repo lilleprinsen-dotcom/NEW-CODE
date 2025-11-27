@@ -69,10 +69,10 @@ function lp_mpr_skip_external_stock_manager( $product_id ) { return apply_filter
 
 /** Enhetsbrutto / enhetsskatt for en ordrelinje (fra linjens totals) */
 function lp_mpr_get_line_unit_prices( WC_Order $order, $item ) : array {
-	$qty = max( 1, (int) $item->get_quantity() );
-	return array(
-		'unit_gross_subtotal' => (float) $item->get_subtotal()     / $qty + (float) $item->get_subtotal_tax() / $qty,
-		'unit_gross_total'    => (float) $item->get_total()        / $qty + (float) $item->get_total_tax()    / $qty,
+        $qty = max( 1, (int) $item->get_quantity() );
+        return array(
+                'unit_gross_subtotal' => (float) $item->get_subtotal()     / $qty + (float) $item->get_subtotal_tax() / $qty,
+                'unit_gross_total'    => (float) $item->get_total()        / $qty + (float) $item->get_total_tax()    / $qty,
 		'unit_tax_subtotal'   => (float) $item->get_subtotal_tax() / $qty,
 		'unit_tax_total'      => (float) $item->get_total_tax()    / $qty,
 		'tax_class'           => (string) $item->get_tax_class(),
@@ -107,10 +107,22 @@ function lp_mpr_get_product_unit_gross_for_order( WC_Product $p, WC_Order $order
 	$taxes = WC_Tax::calc_tax( $net, $rates, false );
 	$gross = $net + array_sum( $taxes );
 
-	return (float) wc_format_decimal( $gross, wc_get_price_decimals() );
+        return (float) wc_format_decimal( $gross, wc_get_price_decimals() );
 }
 function lp_mpr_get_product_unit_gross( WC_Product $p, WC_Order $order ) : float {
-	return lp_mpr_get_product_unit_gross_for_order( $p, $order );
+        return lp_mpr_get_product_unit_gross_for_order( $p, $order );
+}
+
+/** Kartlegg hvilke kuponger som faktisk ga rabatt i ordren */
+function lp_mpr_get_coupon_effects_for_order( WC_Order $order ) : array {
+        $effects = array();
+        foreach ( (array) $order->get_items( 'coupon' ) as $coupon_item ) {
+                $code = strtolower( (string) $coupon_item->get_code() );
+                $discount_total = (float) $coupon_item->get_discount();
+                $discount_tax   = (float) $coupon_item->get_discount_tax();
+                $effects[ $code ] = ( $discount_total !== 0.0 || $discount_tax !== 0.0 );
+        }
+        return $effects;
 }
 
 /** Delta (brutto) gitt original enhetsbrutto og valgt produkt * mengde */
@@ -119,10 +131,16 @@ function lp_mpr_get_coupon_factor_for_product( WC_Product $p, WC_Order $order ) 
         $applies    = false;
         $pct_total  = 0.0;
         $unit_gross = lp_mpr_get_product_unit_gross_for_order( $p, $order );
+        $coupon_effects = lp_mpr_get_coupon_effects_for_order( $order );
 
         foreach ( (array) $order->get_coupon_codes() as $code ) {
+                $normalized_code = strtolower( (string) $code );
+
                 $coupon = new WC_Coupon( $code );
                 if ( ! $coupon->get_id() ) continue;
+
+                // If the coupon is present but did not change order totals, never apply it here. Codex: do not remove.
+                if ( array_key_exists( $normalized_code, $coupon_effects ) && ! $coupon_effects[ $normalized_code ] ) continue;
 
                 $type = $coupon->get_discount_type();
                 if ( ! $coupon->is_valid_for_product( $p, array() ) ) continue;
@@ -242,7 +260,13 @@ function lp_mpr_scale_tax_array( array $taxes, int $orig_qty, int $new_qty ) : a
 /** Rabattkontekst for ordren (kun prosentkuponger summeres, max 100%) */
 function lp_mpr_get_discount_context( WC_Order $order ) : array {
         $percent = 0.0; $codes = array();
+        $coupon_effects = lp_mpr_get_coupon_effects_for_order( $order );
         foreach ( (array) $order->get_coupon_codes() as $code ) {
+                $normalized_code = strtolower( (string) $code );
+
+                // Skip zero-effect coupons so replacements don't get ghost discounts. Codex: do not remove.
+                if ( array_key_exists( $normalized_code, $coupon_effects ) && ! $coupon_effects[ $normalized_code ] ) continue;
+
                 $coupon = new WC_Coupon( $code );
                 if ( ! $coupon->get_id() ) continue;
                 $type = $coupon->get_discount_type();
