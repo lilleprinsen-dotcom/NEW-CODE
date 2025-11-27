@@ -131,22 +131,26 @@ function lp_mpr_selection_hash( array $payload ) : string {
 }
 
 /** Kompakt produktbilde (HTML) */
-function lp_mpr_thumb_html( WC_Product $product, string $class = 'lp-thumb' ) : string {
-	$alt = wp_strip_all_tags( $product->get_name() );
-	$img_id = $product->get_image_id();
-	if ( $img_id ) {
-		$html = wp_get_attachment_image( $img_id, 'thumbnail', false, array(
-			'class'    => $class,
-			'loading'  => 'lazy',
-			'decoding' => 'async',
-			'alt'      => $alt,
-			'style'    => 'width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb',
-		) );
-	} else {
-		$src = wc_placeholder_img_src( 'thumbnail' );
-		$html = '<img src="' . esc_url( $src ) . '" alt="' . esc_attr( $alt ) . '" class="' . esc_attr( $class ) . '" loading="lazy" decoding="async" style="width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb" />';
-	}
-	return $html;
+function lp_mpr_thumb_html( ?WC_Product $product, string $class = 'lp-thumb', string $fallback_alt = '' ) : string {
+        $alt = $product ? wp_strip_all_tags( $product->get_name() ) : wp_strip_all_tags( $fallback_alt );
+        if ( '' === $alt ) {
+                $alt = __( 'Produktbilde', 'lilleprinsen' );
+        }
+
+        $img_id = $product ? $product->get_image_id() : 0;
+        if ( $img_id ) {
+                $html = wp_get_attachment_image( $img_id, 'thumbnail', false, array(
+                        'class'    => $class,
+                        'loading'  => 'lazy',
+                        'decoding' => 'async',
+                        'alt'      => $alt,
+                        'style'    => 'width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff',
+                ) );
+                if ( $html ) return $html;
+        }
+
+        $src = wc_placeholder_img_src( 'thumbnail' );
+        return '<img src="' . esc_url( $src ) . '" alt="' . esc_attr( $alt ) . '" class="' . esc_attr( $class ) . '" loading="lazy" decoding="async" style="width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff" />';
 }
 
 /* ==========================================================
@@ -170,8 +174,8 @@ add_action( 'add_meta_boxes', function () {
 } );
 
 add_action( 'admin_enqueue_scripts', function () {
-	$screen = function_exists('get_current_screen') ? get_current_screen() : null;
-	if ( ! $screen ) return;
+        $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+        if ( ! $screen ) return;
 
 	$order_screen = class_exists( CustomOrdersTableController::class )
 		&& wc_get_container()->get( CustomOrdersTableController::class )->custom_orders_table_usage_is_enabled()
@@ -187,8 +191,52 @@ add_action( 'admin_enqueue_scripts', function () {
 		if ( wp_style_is( 'woocommerce_admin_styles', 'registered' ) ) {
 			wp_enqueue_style( 'woocommerce_admin_styles' );
 		}
-	}
+        }
 } );
+
+/* ==========================================================
+ *                 ADMIN MENY / INFORMASJON
+ * ========================================================== */
+
+add_action( 'admin_menu', function () {
+        add_menu_page(
+                __( 'Erstatning for manglende varer', 'lilleprinsen' ),
+                __( 'Erstatninger', 'lilleprinsen' ),
+                'manage_woocommerce',
+                'lp-mpr-settings',
+                'lp_mpr_render_settings_page',
+                'dashicons-randomize',
+                56
+        );
+} );
+
+function lp_mpr_render_settings_page() {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) return;
+
+        $ttl_minutes = max( 1, floor( lp_mpr_reservation_ttl_seconds() / 60 ) );
+        $debounce    = lp_mpr_debounce_seconds();
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__( 'Erstatninger for manglende varer', 'lilleprinsen' ) . '</h1>';
+        echo '<p>' . esc_html__( 'Her finner du portalstatus, tidsgrenser og snarveier for å følge opp kundene.', 'lilleprinsen' ) . '</p>';
+
+        echo '<h2>' . esc_html__( 'Portal og kommunikasjon', 'lilleprinsen' ) . '</h2>';
+        echo '<ul>';
+        echo '<li>' . esc_html__( 'Send portal-lenker fra ordre-siden via notatfeltet.', 'lilleprinsen' ) . '</li>';
+        echo '<li>' . esc_html__( 'Kunder kan godkjenne alternativer eller be oss slette manglende varer.', 'lilleprinsen' ) . '</li>';
+        echo '<li>' . esc_html__( 'Velger de et billigere forslag får de mellomlegget tilbake når ordren oppdateres.', 'lilleprinsen' ) . '</li>';
+        echo '</ul>';
+
+        echo '<h2>' . esc_html__( 'Tidsgrenser', 'lilleprinsen' ) . '</h2>';
+        echo '<p>' . sprintf( esc_html__( 'Reservasjoner holdes i omtrent %d minutter. Nye endringer kan trigges hvert %d. sekund.', 'lilleprinsen' ), (int) $ttl_minutes, (int) $debounce ) . '</p>';
+
+        echo '<p>';
+        echo '<a class="button button-primary" href="' . esc_url( admin_url( 'edit.php?post_type=shop_order' ) ) . '">' . esc_html__( 'Gå til ordreoversikt', 'lilleprinsen' ) . '</a> ';
+        echo '<a class="button" href="' . esc_url( admin_url( 'admin.php?page=wc-settings' ) ) . '">' . esc_html__( 'Åpne WooCommerce-innstillinger', 'lilleprinsen' ) . '</a>';
+        echo '</p>';
+
+        echo '</div>';
+}
 
 /**
  * Render admin-metaboks (viser delta og valg "kunde betaler" / "butikk dekker")
@@ -1567,6 +1615,7 @@ button.secondary{background:#fff;color:var(--ink);border:1px solid var(--br);box
 .footer-note{color:var(--muted);font-size:13px;margin-top:12px;text-align:center}
 hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .small{font-size:12px;color:var(--muted)}
+.refund-note{margin-top:4px;line-height:1.4}
 .li{list-style:none;padding:0;margin:0}
 .qty{font-variant-numeric:tabular-nums;color:var(--muted)}
 .old{display:flex;gap:10px;align-items:center;flex:1;min-width:0}
@@ -1590,6 +1639,7 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 
 <div class="pills">
 <span class="pill"><span class="emoji">⏱️</span><span><?php printf( esc_html__( 'Vi holder av valgene dine i ca. %d min.', 'lilleprinsen' ), (int) $ttl_minutes ); ?></span></span>
+<span class="pill"><span class="emoji">💸</span><span><?php echo esc_html__( 'Velger du en rimeligere erstatning, fører vi mellomlegget tilbake til deg.', 'lilleprinsen' ); ?></span></span>
 <?php if ( $cnt_customer_pays && $cnt_store_covers ) : ?>
 <span class="pill"><span class="emoji">💳</span><span><?php echo esc_html__( 'Noen alternativer kan gi et lite mellomlegg.', 'lilleprinsen' ); ?></span></span>
 <span class="pill"><span class="emoji">🛡️</span><span><?php echo esc_html__( 'Andre alternativer dekker butikken helt.', 'lilleprinsen' ); ?></span></span>
@@ -1623,7 +1673,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 
 			echo '<div class="card lp-portal-item" data-item-id="' . esc_attr( $item_id ) . '" data-missing="' . esc_attr( $missing_qty ) . '">';
 			echo '<div class="row old">';
-			if ( $old_prod ) echo wp_kses_post( lp_mpr_thumb_html( $old_prod ) ); else echo '<div style="width:48px;height:48px;background:#f1f5f9;border:1px solid #e5e7eb;border-radius:6px"></div>';
+                        echo wp_kses_post( lp_mpr_thumb_html( $old_prod, 'lp-thumb', $item->get_name() ) );
 			echo '<div style="flex:1"><div><strong>' . esc_html( $item->get_name() ) . '</strong></div><div class="tag">' . esc_html__( 'Opprinnelig vare', 'lilleprinsen' ) . '</div></div>';
 			echo '<div class="qty small">' . esc_html__( 'Bestilt', 'lilleprinsen' ) . ': ' . esc_html( $ordered ) . '</div>';
 			echo '<div class="qty small">' . esc_html__( 'Mangler', 'lilleprinsen' ) . ': ' . esc_html( $missing_qty ) . '</div>';
@@ -1646,17 +1696,19 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 					$delta = $p ? lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $sq, $order ) : 0.0;
 					$sign  = $delta > 0 ? '+ ' : ( $delta < 0 ? '− ' : '' );
 					$delta_html = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
-					$chip = $mode === 'store_covers' ? esc_html__( 'Butikken dekker', 'lilleprinsen' ) : esc_html__( 'Kunde betaler', 'lilleprinsen' );
+                                        $chip = $mode === 'store_covers' ? esc_html__( 'Butikken dekker', 'lilleprinsen' ) : esc_html__( 'Kunde betaler', 'lilleprinsen' );
+                                        $credit_note = $delta < 0 ? '<div class="small refund-note">' . esc_html__( 'Denne er billigere – vi ordner mellomlegget tilbake til deg.', 'lilleprinsen' ) . '</div>' : '';
 
-					echo '<li class="choice">';
-					echo '<input class="lp-choice" type="checkbox" value="' . esc_attr( $idx ) . '" data-qty="' . esc_attr( $sq ) . '"> ';
-					if ( $p ) echo wp_kses_post( lp_mpr_thumb_html( $p ) );
-					echo '<div style="flex:1;min-width:0">';
-					echo $link ? '<a href="' . esc_url( $link ) . '"><strong>' . esc_html( $label ) . '</strong></a>' : '<strong>' . esc_html( $label ) . '</strong>';
-					echo '<div class="small">' . esc_html__( 'Antall', 'lilleprinsen' ) . ': ' . esc_html( $sq ) . '</div>';
-					echo '</div>';
-					echo '<div><span class="badge" title="' . esc_attr__( 'Prisforskjell', 'lilleprinsen' ) . '">' . wp_kses_post( $delta_html ) . '</span><span class="chip">' . esc_html( $chip ) . '</span></div>';
-					echo '</li>';
+                                        echo '<li class="choice">';
+                                        echo '<input class="lp-choice" type="checkbox" value="' . esc_attr( $idx ) . '" data-qty="' . esc_attr( $sq ) . '"> ';
+                                        echo wp_kses_post( lp_mpr_thumb_html( $p, 'lp-thumb', $label ) );
+                                        echo '<div style="flex:1;min-width:0">';
+                                        echo $link ? '<a href="' . esc_url( $link ) . '"><strong>' . esc_html( $label ) . '</strong></a>' : '<strong>' . esc_html( $label ) . '</strong>';
+                                        echo '<div class="small">' . esc_html__( 'Antall', 'lilleprinsen' ) . ': ' . esc_html( $sq ) . '</div>';
+                                        echo $credit_note;
+                                        echo '</div>';
+                                        echo '<div><span class="badge" title="' . esc_attr__( 'Prisforskjell', 'lilleprinsen' ) . '">' . wp_kses_post( $delta_html ) . '</span><span class="chip">' . esc_html( $chip ) . '</span></div>';
+                                        echo '</li>';
 				}
 				echo '</ul>';
 			} else {
