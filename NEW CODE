@@ -287,22 +287,24 @@ function lp_mpr_get_product_thumb( ?WC_Product $product, string $fallback_alt = 
         }
 
         $placeholder = wc_placeholder_img_src( 'thumbnail' );
-        $url = '';
+        $url         = '';
         if ( $img_id ) {
-                $src = wp_get_attachment_image_src( $img_id, 'thumbnail' );
-                if ( is_array( $src ) && ! empty( $src[0] ) ) {
-                        $url = (string) $src[0];
+                $src = wp_get_attachment_image_url( $img_id, 'thumbnail' );
+                if ( $src ) {
+                        $url = (string) $src;
                 }
         }
 
-        if ( '' === $url ) {
-                $url = $placeholder;
+        $safe_url = '' === $url ? $placeholder : $url;
+        if ( '' === $safe_url ) {
+                $safe_url = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" preserveAspectRatio="xMidYMid meet"><rect width="120" height="120" fill="%23f1f5f9"/><text x="50%" y="52%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-size="18" font-family="Arial, sans-serif">📦</text></svg>';
         }
 
         return array(
-                'url'   => esc_url_raw( $url ),
-                'alt'   => $alt,
-                'fallback' => esc_url_raw( $placeholder ),
+                'url'       => esc_url_raw( $safe_url ),
+                'actual'    => esc_url_raw( $url ),
+                'alt'       => $alt,
+                'fallback'  => esc_url_raw( $safe_url ),
         );
 }
 
@@ -312,13 +314,14 @@ function lp_mpr_thumb_html( ?WC_Product $product, string $class = 'lp-thumb', st
         $style = 'width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff';
 
         $attrs = array(
-                'class'     => $class,
-                'src'       => $img['url'],
-                'alt'       => $img['alt'],
-                'loading'   => 'eager',
-                'style'     => $style,
-                'onerror'   => $img['fallback'] ? 'this.src=\'' . esc_js( $img['fallback'] ) . '\';this.onerror=null;' : '',
-                'decoding'  => 'async',
+                'class'       => $class,
+                'src'         => $img['fallback'],
+                'data-src'    => $img['actual'] ?: $img['fallback'],
+                'data-fallback' => $img['fallback'],
+                'alt'         => $img['alt'],
+                'loading'     => 'eager',
+                'style'       => $style,
+                'decoding'    => 'async',
         );
 
         return '<img ' . lp_mpr_render_html_attributes( $attrs ) . ' />';
@@ -2309,7 +2312,7 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .summary-label{font-weight:700;font-size:13px}
 .summary-title{margin:8px 0 4px;font-weight:700}
 .summary-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
-.summary-line{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--ink)}
+.summary-line{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--ink);flex-wrap:wrap;align-items:flex-start}
 .summary-price{margin-left:auto}
 .summary-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;z-index:60;padding:16px}
 .summary-backdrop.visible{display:flex}
@@ -2320,13 +2323,17 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .summary-section .summary-title{margin-top:0}
 .summary-empty{color:var(--muted);font-size:13px;margin:4px 0 0}
 .summary-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.summary-meta{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.summary-total{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--br);border-radius:10px;background:#f8fafc;margin:8px 0 12px}
+.summary-total .badge{margin-left:auto}
+.summary-total.negative .badge{background:#ecfdf3;color:#166534;border-color:#22c55e33}
+.summary-total.positive .badge{background:#fef2f2;color:#b91c1c;border-color:#ef444433}
 .final-card{border:1px solid var(--br);background:#f8fafc}
 .lp-step-label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;color:var(--muted);font-size:12px}
-.lp-step-card{position:relative}
-.lp-step-card.completed-step{border-style:dashed;opacity:.9}
-.lp-step-card.future-step{display:none}
-.lp-step-nav{display:flex;gap:8px;justify-content:space-between;margin-top:8px}
-.lp-step-nav button{width:100%}
+.lp-step-card{position:relative;margin-bottom:8px}
+.lp-step-card.completed-step{border-style:dashed;opacity:.97}
+.lp-step-card.future-step{opacity:1;display:block}
+.lp-step-nav{display:none}
 .note-line{color:var(--muted);font-size:13px;margin:4px 0 0}
 @keyframes lp-spin{to{transform:rotate(360deg)}}
 @media (max-width:480px){ .badge{margin-top:4px; width:100%; justify-content:center;} }
@@ -2338,6 +2345,7 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
          data-order-id="<?php echo esc_attr( $order_id ); ?>"
          data-order-key="<?php echo esc_attr( $order_key ); ?>"
          data-nonce="<?php echo esc_attr( wp_create_nonce( 'lp_mpr_portal_action' ) ); ?>"
+         data-currency="<?php echo esc_attr( $order->get_currency() ); ?>"
          data-issue-ver="<?php echo esc_attr( $ver ); ?>">
 <div class="loading-backdrop" id="lp-mpr-loading" role="status" aria-live="polite" aria-label="<?php echo esc_attr__( 'Behandler valgene dine …', 'lilleprinsen' ); ?>">
         <div class="loading-box">
@@ -2457,11 +2465,11 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 			if ( ! empty( $sugs ) ) {
 				echo '<ul class="li">';
 				$unit = lp_mpr_get_line_unit_prices( $order, $item );
-				foreach ( array_values( $sugs ) as $idx => $s ) {
-					$pid = absint( $s['product_id'] ?? 0 );
-					$sq  = max( 0, (int) ( $s['qty'] ?? 0 ) );
-					$mode = in_array( (string) ( $s['mode'] ?? '' ), array( 'customer_pays', 'store_covers' ), true ) ? (string) $s['mode'] : 'customer_pays';
-					if ( ! $pid || $sq <= 0 ) continue;
+                                foreach ( array_values( $sugs ) as $idx => $s ) {
+                                        $pid = absint( $s['product_id'] ?? 0 );
+                                        $sq  = max( 0, (int) ( $s['qty'] ?? 0 ) );
+                                        $mode = in_array( (string) ( $s['mode'] ?? '' ), array( 'customer_pays', 'store_covers' ), true ) ? (string) $s['mode'] : 'customer_pays';
+                                        if ( ! $pid || $sq <= 0 ) continue;
 
 					$p     = wc_get_product( $pid );
 					$label = $p ? wp_strip_all_tags( $p->get_formatted_name() ) : '#' . $pid;
@@ -2469,14 +2477,16 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 
                                         $delta = $p ? lp_mpr_calc_delta_gross( (float) $unit['unit_gross_total'], $p, $sq, $order ) : 0.0;
                                         $delta = lp_mpr_apply_discount_to_delta( $delta, $discount_ctx );
-					$sign  = $delta > 0 ? '+ ' : ( $delta < 0 ? '− ' : '' );
-					$delta_html = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
+                                        $sign  = $delta > 0 ? '+ ' : ( $delta < 0 ? '− ' : '' );
+                                        $delta_html = $sign . wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) );
+                                        $delta_plain = $sign . wp_strip_all_tags( wc_price( abs( $delta ), array( 'currency' => $order->get_currency() ) ) );
                                         $chip = $mode === 'store_covers' ? esc_html__( 'Butikken dekker', 'lilleprinsen' ) : esc_html__( 'Kunde betaler', 'lilleprinsen' );
+                                        $mode_label = $mode === 'store_covers' ? esc_html__( 'Butikken dekker mellomlegget', 'lilleprinsen' ) : esc_html__( 'Kunde betaler mellomlegget', 'lilleprinsen' );
                                         $credit_note = $delta < 0 ? '<div class="small refund-note">' . esc_html__( 'Denne er billigere – vi ordner mellomlegget tilbake til deg.', 'lilleprinsen' ) . '</div>' : '';
                                         $paying_note = ( $mode === 'customer_pays' && $delta > 0 ) ? '<div class="pay-note">' . esc_html__( 'Velger du denne, betaler du mellomlegget for prisforskjellen.', 'lilleprinsen' ) . '</div>' : '';
                                         $chip_html = $delta > 0 ? '<span class="chip">' . esc_html( $chip ) . '</span>' : '';
 
-                                        echo '<li class="choice">';
+                                        echo '<li class="choice" data-delta="' . esc_attr( $delta ) . '" data-delta-display="' . esc_attr( $delta_plain ) . '" data-payer="' . esc_attr( $mode ) . '" data-payer-label="' . esc_attr( $mode_label ) . '">';
                                         echo '<input class="lp-choice" type="checkbox" value="' . esc_attr( $idx ) . '" data-qty="' . esc_attr( $sq ) . '"> ';
                                         echo wp_kses_post( lp_mpr_thumb_html( $p, 'lp-thumb', $label ) );
                                         echo '<div style="flex:1;min-width:0">';
@@ -2508,16 +2518,6 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 		}
 		?>
 
-                <div class="card chat-card">
-                        <h3><?php echo esc_html__( 'Passer ikke forslagene?', 'lilleprinsen' ); ?></h3>
-                        <p class="small"><?php echo esc_html__( 'Send oss en melding, så ser kundeservice på ordren din.', 'lilleprinsen' ); ?></p>
-                        <textarea id="lp-chat-message" placeholder="<?php echo esc_attr__( 'Fortell oss hva du ønsker …', 'lilleprinsen' ); ?>"></textarea>
-                        <div class="actions">
-                                <button type="button" class="secondary" data-action="send_chat"><?php echo esc_html__( 'Send melding til kundeservice', 'lilleprinsen' ); ?></button>
-                        </div>
-                        <p class="muted-note"><?php echo esc_html__( 'Vi svarer på e-post og legger ved hele chatten.', 'lilleprinsen' ); ?></p>
-                </div>
-
                 <div class="card final-card">
                         <h3><?php echo esc_html__( 'Klar til å bekrefte?', 'lilleprinsen' ); ?></h3>
                         <p class="small"><?php echo esc_html__( 'Se over valgene dine og bekreft alle endringer samlet til slutt.', 'lilleprinsen' ); ?></p>
@@ -2528,6 +2528,16 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 </div>
 
                 <p class="footer-note"><?php echo esc_html__( 'Vi venter med å oppdatere ordren til du har bekreftet hele oversikten.', 'lilleprinsen' ); ?></p>
+
+                <div class="card chat-card">
+                        <h3><?php echo esc_html__( 'Passer ikke forslagene?', 'lilleprinsen' ); ?></h3>
+                        <p class="small"><?php echo esc_html__( 'Send oss en melding, så ser kundeservice på ordren din.', 'lilleprinsen' ); ?></p>
+                        <textarea id="lp-chat-message" placeholder="<?php echo esc_attr__( 'Fortell oss hva du ønsker …', 'lilleprinsen' ); ?>"></textarea>
+                        <div class="actions">
+                                <button type="button" class="secondary" data-action="send_chat"><?php echo esc_html__( 'Send melding til kundeservice', 'lilleprinsen' ); ?></button>
+                        </div>
+                        <p class="muted-note"><?php echo esc_html__( 'Vi svarer på e-post og legger ved hele chatten.', 'lilleprinsen' ); ?></p>
+                </div>
 
                 <div class="summary-backdrop" id="lp-summary-modal" aria-hidden="true" role="presentation">
                         <div class="summary-modal" role="dialog" aria-modal="true" aria-labelledby="lp-summary-title">
@@ -2546,7 +2556,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
         <script>
         (function(){
                 var host = document.getElementById('lp-mpr-standalone'); if(!host) return;
-                var ajax=host.getAttribute('data-ajax'), orderId=parseInt(host.getAttribute('data-order-id')||'0',10)||0, orderKey=host.getAttribute('data-order-key')||'', nonce=host.getAttribute('data-nonce')||'', issueVer=parseInt(host.getAttribute('data-issue-ver')||'0',10)||0;
+                var ajax=host.getAttribute('data-ajax'), orderId=parseInt(host.getAttribute('data-order-id')||'0',10)||0, orderKey=host.getAttribute('data-order-key')||'', nonce=host.getAttribute('data-nonce')||'', issueVer=parseInt(host.getAttribute('data-issue-ver')||'0',10)||0, currency=host.getAttribute('data-currency')||'';
                 var cooldown=2500, lastClick=0, redirecting=false;
                 var loadingEl=document.getElementById('lp-mpr-loading');
                 var statusEl=document.getElementById('lp-mpr-status');
@@ -2560,6 +2570,27 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         var t = loadingEl.querySelector('.loading-text');
                         if(t && text){ t.textContent=text; }
                         loadingEl.classList.toggle('visible', !!active);
+                }
+
+                function ensureThumbLoaded(img){
+                        if(!img || img.dataset.loaded) return;
+                        var actual=img.getAttribute('data-src')||'';
+                        var fallback=img.getAttribute('data-fallback')||'';
+                        img.dataset.loaded='1';
+                        if(!actual){ if(fallback && img.src!==fallback){ img.src=fallback; } return; }
+                        var loader=new Image();
+                        loader.onload=function(){ img.src=actual; };
+                        loader.onerror=function(){ if(fallback){ img.src=fallback; } };
+                        loader.src=actual;
+                }
+                function primeThumbs(){ host.querySelectorAll('img.lp-thumb').forEach(ensureThumbLoaded); }
+                function formatMoney(amount){
+                        var opts={minimumFractionDigits:2, maximumFractionDigits:2};
+                        if(currency){
+                                try { return new Intl.NumberFormat(undefined, Object.assign({style:'currency', currency:currency}, opts)).format(amount); }
+                                catch(e){}
+                        }
+                        return amount.toLocaleString(undefined, opts);
                 }
 
                 function showStatus(message, tone){
@@ -2645,18 +2676,9 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 function updateStepperUI(){
                         if(!stepCards.length) return;
                         stepCards.forEach(function(card, idx){
-                                var isActive = idx===activeStep;
-                                var isFuture = idx>activeStep;
-                                var isDone = idx<activeStep && hasDecision(card);
-                                card.classList.toggle('active-step', isActive);
-                                card.classList.toggle('future-step', isFuture);
-                                card.classList.toggle('completed-step', isDone);
+                                card.classList.toggle('completed-step', hasDecision(card));
                                 var progress = card.querySelector('.step-progress');
                                 if(progress){ progress.textContent = (idx+1) + ' / ' + stepCards.length; }
-                                var nextBtn = card.querySelector('button[data-step-nav="next"]');
-                                if(nextBtn){ nextBtn.disabled = idx>=stepCards.length-1 || !hasDecision(card); }
-                                var prevBtn = card.querySelector('button[data-step-nav="prev"]');
-                                if(prevBtn){ prevBtn.disabled = idx===0; }
                         });
                 }
                 function setStep(newStep){
@@ -2675,19 +2697,12 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                                 label.innerHTML='<span class="badge step-progress"></span><span class="small"><?php echo esc_js( __( 'Velg erstatning eller sletting for hver vare før du godkjenner.', 'lilleprinsen' ) ); ?></span>';
                                                 card.insertBefore(label, card.firstChild);
                                         }
-                                if(!card.querySelector('.lp-step-nav')){
-                                        var nav=document.createElement('div');
-                                        nav.className='lp-step-nav';
-                                        var prev=document.createElement('button'); prev.type='button'; prev.className='secondary'; prev.setAttribute('data-step-nav','prev'); prev.textContent='<?php echo esc_js( __( 'Forrige', 'lilleprinsen' ) ); ?>';
-                                        var next=document.createElement('button'); next.type='button'; next.setAttribute('data-step-nav','next'); next.textContent='<?php echo esc_js( __( 'Neste vare', 'lilleprinsen' ) ); ?>';
-                                        nav.appendChild(prev); nav.appendChild(next);
-                                        card.appendChild(nav);
-                                }
                                 updateDecisionBadge(card, selectionDecision(card));
                         });
                         setStep(0);
                 }
                 initStepper();
+                primeThumbs();
                 host.querySelectorAll('.lp-portal-item').forEach(function(card){ updateDecisionBadge(card, selectionDecision(card)); });
                 function markDecline(card){
                         if(!card) return;
@@ -2752,7 +2767,10 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                         var strong=li ? li.querySelector('strong') : null;
                                         if(strong){ chosenName=strong.textContent.trim(); }
                                         var qty=parseInt(c.getAttribute('data-qty')||'0',10)||0;
-                                        picked.push({name:chosenName, qty:qty});
+                                        var deltaTxt = li ? (li.getAttribute('data-delta-display')||'') : '';
+                                        var deltaNum = li ? (parseFloat(li.getAttribute('data-delta')||'0')||0) : 0;
+                                        var payerLabel = li ? (li.getAttribute('data-payer-label')||'') : '';
+                                        picked.push({name:chosenName, qty:qty, deltaText:deltaTxt, deltaNumber:deltaNum, payerLabel:payerLabel});
                                 });
                                 if(picked.length){ data.replacements.push({item:itemName, choices:picked}); }
                         });
@@ -2760,12 +2778,28 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 }
                 function renderSummaryView(data){
                         if(!summaryModal) return;
+                        var totalDelta=0;
+                        data.replacements.forEach(function(entry){
+                                entry.choices.forEach(function(choice){
+                                        totalDelta += choice.deltaNumber || 0;
+                                });
+                        });
                         if(summaryReplacements){
                                 clearEl(summaryReplacements);
                                 var title=document.createElement('p');
                                 title.className='summary-title';
                                 title.textContent='<?php echo esc_js( __( 'Erstatninger', 'lilleprinsen' ) ); ?>';
                                 summaryReplacements.appendChild(title);
+                                if(data.replacements.length){
+                                        var totalBox=document.createElement('div'); totalBox.className='summary-total';
+                                        if(totalDelta!==0){ totalBox.classList.add(totalDelta>0?'positive':'negative'); }
+                                        var totalLabel=document.createElement('span'); totalLabel.textContent='<?php echo esc_js( __( 'Prisforskjell i alt', 'lilleprinsen' ) ); ?>';
+                                        var totalBadge=document.createElement('span'); totalBadge.className='badge summary-price';
+                                        totalBadge.textContent = totalDelta===0 ? '<?php echo esc_js( __( 'Ingen prisendring', 'lilleprinsen' ) ); ?>' : ((totalDelta>0?'+ ':'− ') + formatMoney(Math.abs(totalDelta)));
+                                        totalBox.appendChild(totalLabel);
+                                        totalBox.appendChild(totalBadge);
+                                        summaryReplacements.appendChild(totalBox);
+                                }
                                 if(data.replacements.length){
                                         data.replacements.forEach(function(entry){
                                                 var itemLabel=document.createElement('p');
@@ -2777,6 +2811,14 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                                         var li=document.createElement('li'); li.className='summary-line';
                                                         var left=document.createElement('span'); left.textContent=choice.name + ' × ' + choice.qty;
                                                         li.appendChild(left);
+                                                        if(choice.deltaText){
+                                                                var right=document.createElement('span'); right.className='badge summary-price'; right.textContent=choice.deltaText;
+                                                                li.appendChild(right);
+                                                        }
+                                                        if(choice.payerLabel){
+                                                                var meta=document.createElement('span'); meta.className='summary-meta'; meta.textContent=choice.payerLabel;
+                                                                li.appendChild(meta);
+                                                        }
                                                         list.appendChild(li);
                                                 });
                                                 summaryReplacements.appendChild(list);
@@ -2851,20 +2893,6 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 }
 
                 host.addEventListener('click', function(e){
-                        var nav = e.target.closest('button[data-step-nav]');
-                                if(nav && stepCards.length){
-                                        e.preventDefault();
-                                        var dir = nav.getAttribute('data-step-nav');
-                                        var currentCard = stepCards[activeStep];
-                                        if(dir==='next'){
-                                        if(!hasDecision(currentCard)){ showStatus('<?php echo esc_js( __( 'Velg et alternativ eller marker sletting før du går videre.', 'lilleprinsen' ) ); ?>','error'); return; }
-                                        setStep(activeStep+1);
-                                } else {
-                                        setStep(activeStep-1);
-                                }
-                                return;
-                        }
-
                         var t=e.target.closest('button[data-action]'); if(!t) return;
                                 var act=t.getAttribute('data-action');
                                 if(act==='mark_accept'){
