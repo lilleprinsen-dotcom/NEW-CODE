@@ -1767,7 +1767,7 @@ function lp_mpr_apply_delete_only( WC_Order $order, array $payload ) : array {
 		}
 		$changes[] = array( 'order_item_id'=>$order_item_id, 'old'=>array('name'=>$old_item->get_name(),'qty_before'=>$old_qty,'qty_after'=>$new_qty), 'new_added'=>array() );
 	}
-	$order->calculate_totals(false); $order->save();
+        $order->calculate_totals(); $order->save();
 if ( ! empty( $changes ) ) $order->add_order_note( __( '🗑️ MPR: Manglende vare(r) slettet uten alternativ.', 'lilleprinsen' ), false );
 	return array( 'changes'=>$changes );
 }
@@ -1883,7 +1883,7 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 		);
 	}
 
-	$order->calculate_totals(false); $order->save();
+        $order->calculate_totals(); $order->save();
 	if ( function_exists( 'wc_delete_shop_order_transients' ) ) wc_delete_shop_order_transients( $order->get_id() );
 
 	$currency = $order->get_currency();
