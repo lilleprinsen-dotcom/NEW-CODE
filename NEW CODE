@@ -2216,6 +2216,16 @@ hr{border:0;border-top:1px solid var(--br);margin:10px 0}
 .summary-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
 .summary-line{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--ink)}
 .summary-price{margin-left:auto}
+.summary-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;z-index:60;padding:16px}
+.summary-backdrop.visible{display:flex}
+.summary-modal{background:#fff;max-width:520px;width:100%;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.25);padding:18px;max-height:85vh;overflow:auto}
+.summary-modal h3{margin:0 0 6px;font-size:18px}
+.summary-modal .small{margin:0 0 12px}
+.summary-section{margin:12px 0 0}
+.summary-section .summary-title{margin-top:0}
+.summary-empty{color:var(--muted);font-size:13px;margin:4px 0 0}
+.summary-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.final-card{border:1px solid var(--br);background:#f8fafc}
 .lp-step-label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;color:var(--muted);font-size:12px}
 .lp-step-card{position:relative}
 .lp-step-card.completed-step{border-style:dashed;opacity:.9}
@@ -2374,8 +2384,8 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         echo '<div class="decision-status" aria-live="polite">' . esc_html__( 'Velg erstatning eller marker at vi skal slette den manglende varen for å gå videre.', 'lilleprinsen' ) . '</div>';
 
                         echo '<div class="actions">';
-                        echo '<button type="button" class="primary" data-action="approve_update">' . esc_html__( 'Godkjenn valgte erstatninger', 'lilleprinsen' ) . '</button>';
-                        echo '<button type="button" class="secondary" data-action="delete_missing">' . esc_html__( 'Marker varen som slettet', 'lilleprinsen' ) . '</button>';
+                        echo '<button type="button" class="primary" data-action="mark_accept">' . esc_html__( 'Lagre valget mitt for denne varen', 'lilleprinsen' ) . '</button>';
+                        echo '<button type="button" class="secondary" data-action="delete_missing">' . esc_html__( 'Jeg vil slette denne varen i stedet', 'lilleprinsen' ) . '</button>';
                         echo '</div>';
 
 			echo '</div>'; // card
@@ -2392,7 +2402,29 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         <p class="muted-note"><?php echo esc_html__( 'Vi svarer på e-post og legger ved hele chatten.', 'lilleprinsen' ); ?></p>
                 </div>
 
-                <p class="footer-note"><?php echo esc_html__( 'Vi oppdaterer ordren med en gang og viser deg neste steg.', 'lilleprinsen' ); ?></p>
+                <div class="card final-card">
+                        <h3><?php echo esc_html__( 'Klar til å bekrefte?', 'lilleprinsen' ); ?></h3>
+                        <p class="small"><?php echo esc_html__( 'Se over valgene dine og bekreft alle endringer samlet til slutt.', 'lilleprinsen' ); ?></p>
+                        <div class="actions">
+                                <button type="button" class="primary" data-action="open_summary"><?php echo esc_html__( 'Bekreft alle endringer', 'lilleprinsen' ); ?></button>
+                        </div>
+                        <p class="muted-note"><?php echo esc_html__( 'Du får en tydelig oversikt før vi oppdaterer ordren.', 'lilleprinsen' ); ?></p>
+                </div>
+
+                <p class="footer-note"><?php echo esc_html__( 'Vi venter med å oppdatere ordren til du har bekreftet hele oversikten.', 'lilleprinsen' ); ?></p>
+
+                <div class="summary-backdrop" id="lp-summary-modal" aria-hidden="true" role="presentation">
+                        <div class="summary-modal" role="dialog" aria-modal="true" aria-labelledby="lp-summary-title">
+                                <h3 id="lp-summary-title"><?php echo esc_html__( 'Se over endringene dine', 'lilleprinsen' ); ?></h3>
+                                <p class="small"><?php echo esc_html__( 'Vi oppdaterer først etter at du har bekreftet denne oversikten.', 'lilleprinsen' ); ?></p>
+                                <div id="lp-summary-replacements" class="summary-section"></div>
+                                <div id="lp-summary-deletions" class="summary-section"></div>
+                                <div class="summary-actions">
+                                        <button type="button" class="secondary" data-action="close_summary"><?php echo esc_html__( 'Tilbake', 'lilleprinsen' ); ?></button>
+                                        <button type="button" class="primary" data-action="confirm_changes"><?php echo esc_html__( 'Bekreft og oppdater', 'lilleprinsen' ); ?></button>
+                                </div>
+                        </div>
+                </div>
         </div>
 
         <script>
@@ -2402,6 +2434,9 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                 var cooldown=2500, lastClick=0, redirecting=false;
                 var loadingEl=document.getElementById('lp-mpr-loading');
                 var statusEl=document.getElementById('lp-mpr-status');
+                var summaryModal=document.getElementById('lp-summary-modal');
+                var summaryReplacements=document.getElementById('lp-summary-replacements');
+                var summaryDeletions=document.getElementById('lp-summary-deletions');
                 var stepCards=[], activeStep=0;
 
                 function setLoading(active, text){
@@ -2416,6 +2451,14 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         statusEl.innerHTML = message;
                         statusEl.className = 'status show' + (tone ? ' ' + tone : '');
                 }
+
+                function toggleSummary(show){
+                        if(!summaryModal) return;
+                        summaryModal.classList.toggle('visible', !!show);
+                        summaryModal.setAttribute('aria-hidden', show ? 'false' : 'true');
+                }
+
+                function clearEl(el){ while(el && el.firstChild){ el.removeChild(el.firstChild); } }
 
                 function selectionDecision(card){ return (card && card.getAttribute('data-decision')) || ''; }
                 function updateDecisionBadge(card, state){
@@ -2485,8 +2528,6 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                                 card.classList.toggle('completed-step', isDone);
                                 var progress = card.querySelector('.step-progress');
                                 if(progress){ progress.textContent = (idx+1) + ' / ' + stepCards.length; }
-                                var approve = card.querySelector('button[data-action="approve_update"]');
-                                if(approve){ approve.disabled = stepCards.length>1 && idx!==stepCards.length-1; }
                                 var nextBtn = card.querySelector('button[data-step-nav="next"]');
                                 if(nextBtn){ nextBtn.disabled = idx>=stepCards.length-1 || !hasDecision(card); }
                                 var prevBtn = card.querySelector('button[data-step-nav="prev"]');
@@ -2528,6 +2569,8 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         card.querySelectorAll('.lp-choice').forEach(function(c){ c.checked=false; });
                         updateDecisionBadge(card,'decline');
                         updateStepperUI();
+                        showStatus('<?php echo esc_js( __( 'Vi sletter denne varen når du bekrefter alle endringer.', 'lilleprinsen' ) ); ?>','success');
+                        if(stepCards.length>1 && activeStep<stepCards.length-1){ setStep(activeStep+1); }
                 }
                 function onChoiceChange(card){
                         if(!card) return;
@@ -2535,7 +2578,110 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         updateDecisionBadge(card, any ? 'accept' : '');
                         updateStepperUI();
                 }
-          function post(which, extra){
+                function markAccept(card){
+                        if(!card) return;
+                        if(overChosen(card)){ showStatus('<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>','error'); return; }
+                        var any = !!card.querySelector('.lp-choice:checked');
+                        if(!any){ showStatus('<?php echo esc_js( __( 'Velg erstatning før du lagrer valget for denne varen.', 'lilleprinsen' ) ); ?>','error'); return; }
+                        updateDecisionBadge(card,'accept');
+                        updateStepperUI();
+                        showStatus('<?php echo esc_js( __( 'Valget er lagt til oversikten. Bekreft alle endringer nederst.', 'lilleprinsen' ) ); ?>','success');
+                        if(stepCards.length>1 && activeStep<stepCards.length-1){ setStep(activeStep+1); }
+                }
+                function collectChoices(){
+                        return { selections: selections(), declines: declines() };
+                }
+                function validateBeforeSubmit(){
+                        var bad=false;
+                        host.querySelectorAll('.lp-portal-item').forEach(function(card){ if(overChosen(card)) bad=true; });
+                        if(bad){ return { ok:false, message:'<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>' }; }
+
+                        var responseCards = cardsRequiringSelection();
+                        if(responseCards.length){
+                                var missingAnswers = unansweredCards(responseCards);
+                                if(missingAnswers.length){ return { ok:false, message:'<?php echo esc_js( __( 'Velg erstatning eller sletting for alle varene som mangler.', 'lilleprinsen' ) ); ?>' }; }
+                        }
+
+                        var choiceData = collectChoices();
+                        if(Object.keys(choiceData.selections).length===0 && !choiceData.declines.length){
+                                return { ok:false, message:'<?php echo esc_js( __( 'Velg erstatning eller marker sletting før du går videre.', 'lilleprinsen' ) ); ?>' };
+                        }
+
+                        return { ok:true, selections: choiceData.selections, declines: choiceData.declines };
+                }
+                function summaryData(){
+                        var data={replacements:[], deletions:[]};
+                        host.querySelectorAll('.lp-portal-item').forEach(function(card){
+                                var itemName='';
+                                var nameEl=card.querySelector('.old strong');
+                                if(nameEl){ itemName=nameEl.textContent.trim(); }
+                                var missing=parseInt(card.getAttribute('data-missing')||'0',10)||0;
+                                if(selectionDecision(card)==='decline'){
+                                        data.deletions.push({item:itemName, qty:missing});
+                                        return;
+                                }
+                                var picked=[];
+                                card.querySelectorAll('.lp-choice:checked').forEach(function(c){
+                                        var li=c.closest('li.choice');
+                                        var chosenName='';
+                                        var strong=li ? li.querySelector('strong') : null;
+                                        if(strong){ chosenName=strong.textContent.trim(); }
+                                        var qty=parseInt(c.getAttribute('data-qty')||'0',10)||0;
+                                        picked.push({name:chosenName, qty:qty});
+                                });
+                                if(picked.length){ data.replacements.push({item:itemName, choices:picked}); }
+                        });
+                        return data;
+                }
+                function renderSummaryView(data){
+                        if(!summaryModal) return;
+                        if(summaryReplacements){
+                                clearEl(summaryReplacements);
+                                var title=document.createElement('p');
+                                title.className='summary-title';
+                                title.textContent='<?php echo esc_js( __( 'Erstatninger', 'lilleprinsen' ) ); ?>';
+                                summaryReplacements.appendChild(title);
+                                if(data.replacements.length){
+                                        data.replacements.forEach(function(entry){
+                                                var itemLabel=document.createElement('p');
+                                                itemLabel.className='summary-label';
+                                                itemLabel.textContent=entry.item||'<?php echo esc_js( __( 'Vare', 'lilleprinsen' ) ); ?>';
+                                                summaryReplacements.appendChild(itemLabel);
+                                                var list=document.createElement('ul'); list.className='summary-list';
+                                                entry.choices.forEach(function(choice){
+                                                        var li=document.createElement('li'); li.className='summary-line';
+                                                        var left=document.createElement('span'); left.textContent=choice.name + ' × ' + choice.qty;
+                                                        li.appendChild(left);
+                                                        list.appendChild(li);
+                                                });
+                                                summaryReplacements.appendChild(list);
+                                        });
+                                } else {
+                                        var empty=document.createElement('p'); empty.className='summary-empty'; empty.textContent='<?php echo esc_js( __( 'Ingen erstatninger valgt.', 'lilleprinsen' ) ); ?>'; summaryReplacements.appendChild(empty);
+                                }
+                        }
+                        if(summaryDeletions){
+                                clearEl(summaryDeletions);
+                                var delTitle=document.createElement('p');
+                                delTitle.className='summary-title';
+                                delTitle.textContent='<?php echo esc_js( __( 'Slettinger', 'lilleprinsen' ) ); ?>';
+                                summaryDeletions.appendChild(delTitle);
+                                if(data.deletions.length){
+                                        var delList=document.createElement('ul'); delList.className='summary-list';
+                                        data.deletions.forEach(function(entry){
+                                                var li=document.createElement('li'); li.className='summary-line';
+                                                var left=document.createElement('span'); left.textContent=entry.item||'<?php echo esc_js( __( 'Vare', 'lilleprinsen' ) ); ?>';
+                                                var qty=document.createElement('span'); qty.className='badge summary-price'; qty.textContent='− ' + entry.qty;
+                                                li.appendChild(left); li.appendChild(qty);
+                                                delList.appendChild(li);
+                                        });
+                                        summaryDeletions.appendChild(delList);
+                                } else {
+                                        var delEmpty=document.createElement('p'); delEmpty.className='summary-empty'; delEmpty.textContent='<?php echo esc_js( __( 'Ingen varer markert for sletting.', 'lilleprinsen' ) ); ?>'; summaryDeletions.appendChild(delEmpty);
+                                }
+                        }
+                }
+                function post(which, extra){
                         var now=Date.now(); if(now-lastClick<cooldown) return; lastClick=now;
                         var loadingText = (extra && extra.loadingText) ? extra.loadingText : '<?php echo esc_js( __( 'Behandler valgene dine …', 'lilleprinsen' ) ); ?>';
                         if(extra && extra.loading){ setLoading(true, loadingText); }
@@ -2575,23 +2721,23 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
 
                         var t=e.target.closest('button[data-action]'); if(!t) return;
                                 var act=t.getAttribute('data-action');
-                                if(act==='approve_update'){
-                                        var bad=false; host.querySelectorAll('.lp-portal-item').forEach(function(card){ if(overChosen(card)) bad=true; });
-                                        if(bad){ showStatus('<?php echo esc_js( __( 'Valgt antall er for høyt i forhold til det som mangler.', 'lilleprinsen' ) ); ?>','error'); return; }
-                                        var sel=selections();
-                                        var declineList=declines();
-                                        if(Object.keys(sel).length===0 && !declineList.length){ showStatus('<?php echo esc_js( __( 'Velg erstatning eller marker sletting før du går videre.', 'lilleprinsen' ) ); ?>','error'); return; }
-                                        if(stepCards.length>1 && activeStep<stepCards.length-1){ showStatus('<?php echo esc_js( __( 'Gå videre og velg for alle varene først.', 'lilleprinsen' ) ); ?>','error'); return; }
-                                        var responseCards = cardsRequiringSelection();
-                                        if(responseCards.length){
-                                                var missingAnswers = unansweredCards(responseCards);
-                                                if(missingAnswers.length){ showStatus('<?php echo esc_js( __( 'Velg erstatning eller sletting for alle varene som mangler.', 'lilleprinsen' ) ); ?>','error'); return; }
-                                        }
-                                        post('approve_update',{selections:sel,declines:declineList,loading:true,loadingText:'<?php echo esc_js( __( 'Oppdaterer ordren din …', 'lilleprinsen' ) ); ?>'});
+                                if(act==='mark_accept'){
+                                        markAccept(t.closest('.lp-portal-item'));
                                 }else if(act==='delete_missing'){
-                                        var card=t.closest('.lp-portal-item');
-                                        markDecline(card);
-                                        showStatus('<?php echo esc_js( __( 'Vi sletter denne varen når du bekrefter på siste steg.', 'lilleprinsen' ) ); ?>','success');
+                                        markDecline(t.closest('.lp-portal-item'));
+                                }else if(act==='open_summary'){
+                                        var ready = validateBeforeSubmit();
+                                        if(!ready.ok){ showStatus(ready.message,'error'); return; }
+                                        renderSummaryView(summaryData());
+                                        toggleSummary(true);
+                                }else if(act==='close_summary'){
+                                        toggleSummary(false);
+                                }else if(act==='confirm_changes'){
+                                        var validation = validateBeforeSubmit();
+                                        if(!validation.ok){ toggleSummary(false); showStatus(validation.message,'error'); return; }
+                                        renderSummaryView(summaryData());
+                                        toggleSummary(false);
+                                        post('approve_update',{selections:validation.selections,declines:validation.declines,loading:true,loadingText:'<?php echo esc_js( __( 'Oppdaterer ordren din …', 'lilleprinsen' ) ); ?>'});
                                 }else if(act==='send_chat'){
                                         var field=document.getElementById('lp-chat-message');
                                         var msg=field ? (field.value||'').trim() : '';
