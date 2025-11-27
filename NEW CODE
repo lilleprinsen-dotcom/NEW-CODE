@@ -2145,7 +2145,11 @@ function lp_mpr_apply_delete_only( WC_Order $order, array $payload ) : array {
 }
 
 function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : array {
-	$changes = array(); $old_stock_mode = $opts['old_stock_mode'] ?? 'decrease'; $cap_enabled = ! empty( $opts['cap'] );
+        $changes = array(); $old_stock_mode = $opts['old_stock_mode'] ?? 'decrease'; $cap_enabled = ! empty( $opts['cap'] );
+        $cap_total_at = array_key_exists( 'cap_total_at', $opts ) ? (float) wc_format_decimal( $opts['cap_total_at'], wc_get_price_decimals() ) : null;
+        $fee_order_id = isset( $opts['fee_order_id'] ) ? (int) $opts['fee_order_id'] : 0;
+        $baseline_total = null !== $cap_total_at ? $cap_total_at : (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
+        $discount_applied = false; $discount_amount = 0.0; $discount_label = '';
 
 	foreach ( (array) $payload['items'] as $it ) {
 		$order_item_id = absint( $it['order_item_id'] ); $replacements = (array) ( $it['replacements'] ?? array() );
@@ -2256,30 +2260,61 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 	}
 
         $order->calculate_totals(); $order->save();
-	if ( function_exists( 'wc_delete_shop_order_transients' ) ) wc_delete_shop_order_transients( $order->get_id() );
 
-	$currency = $order->get_currency();
-	if ( ! empty( $changes ) ) {
-		$lines = array();
-		foreach ( $changes as $c ) {
-			$old = $c['old'];
-			$id_label = '#' . $old['product_id'] . ( $old['variation_id'] ? '/' . $old['variation_id'] : '' );
-			$lines[] = sprintf( '• %s (%s): %d → %d — %s', $old['name'], $id_label, $old['qty_before'], $old['qty_after'], $old['stock_mode'] );
-			foreach ( $c['new_added'] as $n ) {
-				$price_str = wp_strip_all_tags( wc_price( $n['total_gross'], array( 'currency' => $currency ) ) );
-				$stock_note = '';
-				if ( $n['stock_before'] !== null && $n['stock_after'] !== null ) {
-					$stock_note = ' (' . sprintf( __( 'lager %d → %d', 'lilleprinsen' ), $n['stock_before'], $n['stock_after'] ) . ')';
-				}
-				$lines[] = sprintf( '   ↳ + %s (#%d) × %d — %s%s', $n['name'], $n['product_id'], $n['qty'], $price_str, $stock_note );
-			}
-		}
-           $policy = __( 'Politikk: cap per linje; bruk produktpris i ordre-kontekst; behold rabatter; frakt uendret.', 'lilleprinsen' );
-		$order->add_order_note( "🧾 MPR: Erstatning brukt\n" . implode( "\n", $lines ) . "\n" . $policy, false );
-	} else {
-		$order->add_order_note( __( 'ℹ️ MPR: Ingen endringer ble gjort.', 'lilleprinsen' ), false );
-	}
-	return array( 'changes' => $changes );
+        if ( null !== $cap_total_at ) {
+                $current_total = (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
+                if ( $current_total > $baseline_total ) {
+                        $diff = (float) wc_format_decimal( $current_total - $baseline_total, wc_get_price_decimals() );
+                        $discount_label = sprintf( __( 'Mellomlegg betalt på Ordre %s', 'lilleprinsen' ), $fee_order_id ? $fee_order_id : $order->get_order_number() );
+
+                        foreach ( $order->get_items( 'fee' ) as $fee_item ) {
+                                if ( $discount_label === $fee_item->get_name() ) $order->remove_item( $fee_item->get_id() );
+                        }
+
+                        if ( $diff > 0 ) {
+                                $discount = new WC_Order_Item_Fee();
+                                $discount->set_name( $discount_label );
+                                $discount->set_amount( -1 * $diff );
+                                $discount->set_total(  -1 * $diff );
+                                $discount->set_tax_status( 'none' );
+                                $order->add_item( $discount );
+
+                                $order->calculate_totals();
+                                $order->save();
+
+                                $discount_applied = true;
+                                $discount_amount  = $diff;
+                        }
+                }
+        }
+
+        if ( function_exists( 'wc_delete_shop_order_transients' ) ) wc_delete_shop_order_transients( $order->get_id() );
+
+        $currency = $order->get_currency();
+        if ( ! empty( $changes ) ) {
+                $lines = array();
+                foreach ( $changes as $c ) {
+                        $old = $c['old'];
+                        $id_label = '#' . $old['product_id'] . ( $old['variation_id'] ? '/' . $old['variation_id'] : '' );
+                        $lines[] = sprintf( '• %s (%s): %d → %d — %s', $old['name'], $id_label, $old['qty_before'], $old['qty_after'], $old['stock_mode'] );
+                        foreach ( $c['new_added'] as $n ) {
+                                $price_str = wp_strip_all_tags( wc_price( $n['total_gross'], array( 'currency' => $currency ) ) );
+                                $stock_note = '';
+                                if ( $n['stock_before'] !== null && $n['stock_after'] !== null ) {
+                                        $stock_note = ' (' . sprintf( __( 'lager %d → %d', 'lilleprinsen' ), $n['stock_before'], $n['stock_after'] ) . ')';
+                                }
+                                $lines[] = sprintf( '   ↳ + %s (#%d) × %d — %s%s', $n['name'], $n['product_id'], $n['qty'], $price_str, $stock_note );
+                        }
+                }
+                if ( $discount_applied && $discount_amount > 0 ) {
+                        $lines[] = sprintf( '   ↳ %s — %s', $discount_label, wp_strip_all_tags( wc_price( -1 * $discount_amount, array( 'currency' => $currency ) ) ) );
+                }
+                $policy = __( 'Politikk: cap per linje; bruk produktpris i ordre-kontekst; behold rabatter; frakt uendret.', 'lilleprinsen' );
+                $order->add_order_note( "🧾 MPR: Erstatning brukt\n" . implode( "\n", $lines ) . "\n" . $policy, false );
+        } else {
+                $order->add_order_note( __( 'ℹ️ MPR: Ingen endringer ble gjort.', 'lilleprinsen' ), false );
+        }
+        return array( 'changes' => $changes );
 }
 
 /** Tilleggsordre (avgiftsfri fee på brutto mellomlegg) */
@@ -2333,17 +2368,21 @@ function lp_mpr_on_fee_order_paid( $fee_order_id ) {
         $parent_id = (int) $fee->get_meta( '_lp_mpr_parent_order_id', true ); if ( ! $parent_id ) return;
 	$parent = wc_get_order( $parent_id ); if ( ! $parent ) return;
 
-	$pending = (array) $parent->get_meta( '_lp_mpr_pending', true );
-	if ( empty( $pending['hash'] ) || empty( $pending['payload'] ) ) { $parent->add_order_note( __( 'MPR: Ingen pending payload ved registrert betaling av tilleggsordre.', 'lilleprinsen' ), false ); return; }
+        $pending = (array) $parent->get_meta( '_lp_mpr_pending', true );
+        if ( empty( $pending['hash'] ) || empty( $pending['payload'] ) ) { $parent->add_order_note( __( 'MPR: Ingen pending payload ved registrert betaling av tilleggsordre.', 'lilleprinsen' ), false ); return; }
 
-	$hash_parent = (string) $pending['hash']; $hash_child  = (string) $fee->get_meta( '_lp_mpr_hash', true );
-	if ( $hash_child && $hash_child !== $hash_parent ) { $parent->add_order_note( __( 'MPR: Hash-mismatch mellom tilleggsordre og payload — hopper over.', 'lilleprinsen' ), false ); return; }
+        $hash_parent = (string) $pending['hash']; $hash_child  = (string) $fee->get_meta( '_lp_mpr_hash', true );
+        if ( $hash_child && $hash_child !== $hash_parent ) { $parent->add_order_note( __( 'MPR: Hash-mismatch mellom tilleggsordre og payload — hopper over.', 'lilleprinsen' ), false ); return; }
 
-	try {
-		$result = lp_mpr_apply_now( $parent, (array) $pending['payload'], array(
-			'old_stock_mode' => ( $pending['payload']['policy']['stock']['old'] ?? 'decrease' ),
-			'cap'            => true,
-		) );
+        $fee_order_id = $fee->get_id();
+
+        try {
+                $result = lp_mpr_apply_now( $parent, (array) $pending['payload'], array(
+                        'old_stock_mode' => ( $pending['payload']['policy']['stock']['old'] ?? 'decrease' ),
+                        'cap'            => true,
+                        'cap_total_at'   => (float) wc_format_decimal( $parent->get_total(), wc_get_price_decimals() ),
+                        'fee_order_id'   => $fee_order_id,
+                ) );
 		$applied_map = (array) $parent->get_meta( '_lp_mpr_applied', true );
 		$applied_map[ $hash_parent ] = array( 'applied_at' => time(), 'v' => 2, 'by_fee' => $fee_order_id );
 		$parent->update_meta_data( '_lp_mpr_applied', $applied_map );
