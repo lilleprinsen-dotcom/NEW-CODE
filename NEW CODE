@@ -2292,6 +2292,30 @@ function lp_mpr_apply_replacements_atomic_v2( WC_Order $order, array $payload ) 
         $pricing['order_total_delta_html'] = wp_kses_post( wc_price( abs( $pricing['order_total_delta'] ), array( 'currency' => $order->get_currency() ) ) );
         $pricing['order_total_html']       = $pricing['order_total_after_html'];
         $pricing['order_total_before_html']= wp_kses_post( wc_price( $pricing['order_total_before'], array( 'currency' => $order->get_currency() ) ) );
+
+        if ( $pricing['order_total_after'] > $pricing['order_total_before'] + 0.01 ) {
+                $over = (float) wc_format_decimal( $pricing['order_total_after'] - $pricing['order_total_before'], wc_get_price_decimals() );
+
+                // ⚠️ Loggvarsel finnes fra før – behold denne, men vi capper også totalsummen eksplisitt.
+                if ( $over > 0 ) {
+                        $adjustment = new WC_Order_Item_Fee();
+                        $adjustment->set_name( __( 'MPR: Justering ned til original totalsum', 'lilleprinsen' ) );
+                        $adjustment->set_amount( -1 * $over );
+                        $adjustment->set_total(  -1 * $over );
+                        $adjustment->set_tax_status( 'none' );
+
+                        $order->add_item( $adjustment );
+                        lp_mpr_recalculate_order( $order );
+                        $order->save();
+
+                        $pricing['order_total_after']      = $pricing['order_total_before'];
+                        $pricing['order_total_after_html'] = wp_kses_post( wc_price( $pricing['order_total_after'], array( 'currency' => $order->get_currency() ) ) );
+                        $pricing['order_total_delta']      = 0.0;
+                        $pricing['order_total_delta_html'] = wp_kses_post( wc_price( 0, array( 'currency' => $order->get_currency() ) ) );
+                        $pricing['order_total_html']       = $pricing['order_total_after_html'];
+                }
+        }
+
         $pricing['delta_payer']            = $pricing['order_total_delta'] > 0
                 ? ( $pricing['delta_gross_sum'] > 0 ? 'customer' : 'store' )
                 : ( $pricing['order_total_delta'] < 0 ? 'store' : 'even' );
