@@ -258,8 +258,8 @@ function lp_mpr_selection_hash( array $payload ) : string {
 	return sha1( wp_json_encode( $stable ) );
 }
 
-/** Kompakt produktbilde (HTML) */
-function lp_mpr_thumb_html( ?WC_Product $product, string $class = 'lp-thumb', string $fallback_alt = '' ) : string {
+/** Finner et sikkert produktbilde (URL + alt-tekst) */
+function lp_mpr_get_product_thumb( ?WC_Product $product, string $fallback_alt = '' ) : array {
         $alt = $product ? wp_strip_all_tags( $product->get_name() ) : wp_strip_all_tags( $fallback_alt );
         if ( '' === $alt ) {
                 $alt = __( 'Produktbilde', 'lilleprinsen' );
@@ -276,31 +276,37 @@ function lp_mpr_thumb_html( ?WC_Product $product, string $class = 'lp-thumb', st
                 }
         }
 
-        $style = 'width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff';
-        $common_attrs = array(
-                'class'    => $class,
-                'loading'  => 'lazy',
-                'decoding' => 'async',
-                'alt'      => $alt,
-                'style'    => $style,
-        );
-
+        $url = '';
         if ( $img_id ) {
-                $img_html = wp_get_attachment_image( $img_id, 'thumbnail', false, $common_attrs );
-                if ( $img_html ) {
-                        return $img_html;
-                }
-
-                $url = wp_get_attachment_image_url( $img_id, 'thumbnail' );
-                if ( $url ) {
-                        $attrs = $common_attrs;
-                        $attrs['src'] = esc_url_raw( $url );
-                        return '<img ' . lp_mpr_render_html_attributes( $attrs ) . ' />';
+                $src = wp_get_attachment_image_src( $img_id, 'thumbnail' );
+                if ( is_array( $src ) && ! empty( $src[0] ) ) {
+                        $url = (string) $src[0];
                 }
         }
 
-        $attrs = $common_attrs;
-        $attrs['src'] = wc_placeholder_img_src( 'thumbnail' );
+        if ( '' === $url ) {
+                $url = wc_placeholder_img_src( 'thumbnail' );
+        }
+
+        return array(
+                'url' => esc_url_raw( $url ),
+                'alt' => $alt,
+        );
+}
+
+/** Kompakt produktbilde (HTML) – enkel WooCommerce-basert renderer */
+function lp_mpr_thumb_html( ?WC_Product $product, string $class = 'lp-thumb', string $fallback_alt = '' ) : string {
+        $img = lp_mpr_get_product_thumb( $product, $fallback_alt );
+        $style = 'width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb;display:block;background:#fff';
+
+        $attrs = array(
+                'class'   => $class,
+                'src'     => $img['url'],
+                'alt'     => $img['alt'],
+                'loading' => 'eager',
+                'style'   => $style,
+        );
+
         return '<img ' . lp_mpr_render_html_attributes( $attrs ) . ' />';
 }
 
@@ -2519,15 +2525,7 @@ echo '<div class="card"><p>' . esc_html__( 'Ingen erstatninger foreslått akkura
                         if(!stepCards.length) return;
                         var choice = e.target.closest('.lp-choice');
                         if(choice){
-                                var card = choice.closest('.lp-portal-item');
-                                var idx = stepCards.indexOf(card);
-                                if(idx !== -1){
-                                        if(idx===activeStep && hasSelection(card) && activeStep<stepCards.length-1){
-                                                setStep(activeStep+1);
-                                        } else {
-                                                updateStepperUI();
-                                        }
-                                }
+                                updateStepperUI();
                         }
                 });
         })();
