@@ -212,6 +212,15 @@ function lp_mpr_discount_factor_from_units( float $unit_gross_subtotal, float $u
         return max( 0.0, min( 1.0, (float) wc_format_decimal( $factor, 6 ) ) );
 }
 
+/** Kjør full recalculation tilsvarende WooCommerce "Recalculate" */
+function lp_mpr_recalculate_order( WC_Order $order ) : void {
+        if ( class_exists( 'WC_Admin_Order' ) && method_exists( 'WC_Admin_Order', 'calculate_totals' ) ) {
+                \WC_Admin_Order::calculate_totals( $order );
+        } else {
+                $order->calculate_totals( true );
+        }
+}
+
 /** Skaler mva-matrise (beholder per-sats fordeling) */
 function lp_mpr_scale_tax_array( array $taxes, int $orig_qty, int $new_qty ) : array {
         $orig_qty = max(1, (int) $orig_qty);
@@ -259,7 +268,9 @@ function lp_mpr_apply_discount_to_delta( float $delta, array $discount_ctx, bool
         // again would double-discount the difference customers pay.
         if ( $delta <= 0 || $percent <= 0 || ! $coupon_priced ) return $delta;
 
-        return $delta;
+        $factor = max( 0.0, ( 100.0 - min( 100.0, $percent ) ) / 100.0 );
+
+        return (float) wc_format_decimal( $delta * $factor, wc_get_price_decimals() );
 }
 
 /* ==========================================================
@@ -2184,7 +2195,7 @@ function lp_mpr_apply_delete_only( WC_Order $order, array $payload ) : array {
 		}
 		$changes[] = array( 'order_item_id'=>$order_item_id, 'old'=>array('name'=>$old_item->get_name(),'qty_before'=>$old_qty,'qty_after'=>$new_qty), 'new_added'=>array() );
         }
-        $order->calculate_totals(); $order->save();
+        lp_mpr_recalculate_order( $order ); $order->save();
         $pricing['order_total_after']       = (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
         $pricing['order_total_after_html']  = wp_kses_post( wc_price( $pricing['order_total_after'], array( 'currency' => $order->get_currency() ) ) );
         $pricing['order_total_before_html'] = wp_kses_post( wc_price( $pricing['order_total_before'], array( 'currency' => $order->get_currency() ) ) );
@@ -2337,7 +2348,7 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 		);
 	}
 
-        $order->calculate_totals(); $order->save();
+        lp_mpr_recalculate_order( $order ); $order->save();
 
         $current_total = (float) wc_format_decimal( $order->get_total(), wc_get_price_decimals() );
         $paid_on_other_order = 0.0; $fee_reason = ''; $fee_order = null;
@@ -2353,8 +2364,8 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
                 }
         }
 
-        $over_original   = (float) wc_format_decimal( max( 0, $current_total - $baseline_total ), wc_get_price_decimals() );
-        $discount_amount = (float) wc_format_decimal( max( $over_original, $paid_on_other_order ), wc_get_price_decimals() );
+        $intermediate    = (float) wc_format_decimal( max( 0, $current_total - $baseline_total ), wc_get_price_decimals() );
+        $discount_amount = $intermediate;
 
         if ( $discount_amount > 0 ) {
                 $discount_label = sprintf( __( 'Mellomlegg betalt på Ordre %s', 'lilleprinsen' ), $fee_order_id ? $fee_order_id : $order->get_order_number() );
@@ -2406,7 +2417,7 @@ function lp_mpr_apply_now( WC_Order $order, array $payload, array $opts ) : arra
 
                 $order->add_item( $discount );
 
-                $order->calculate_totals();
+                lp_mpr_recalculate_order( $order );
                 $order->save();
 
                 $discount_applied = true;
@@ -2465,7 +2476,7 @@ function lp_mpr_create_extra_fee_order( WC_Order $parent, array $payload, float 
 	$child->add_item( $fee );
 
 	$child->set_currency( $parent->get_currency() );
-	$child->calculate_totals( false );
+        lp_mpr_recalculate_order( $child );
 	$child->update_status( 'pending', __( 'Ventende tilleggsbetaling (MPR).', 'lilleprinsen' ), true );
 	$child->save();
 
